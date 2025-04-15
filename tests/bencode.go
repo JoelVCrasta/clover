@@ -1,20 +1,24 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
+	"os"
 	"strconv"
-  "encoding/json"
 )
 
 func main() {
-  bencode_string := "d8:announce35:udp://tracker.openbittorrent.com:8013:creation datei1327049827e4:infod6:lengthi20e4:name10:sample.txt12:piece lengthi65536e6:pieces70:<hex>5C C5 E6 52 BE 0D E6 F2 78 05 B3 04 64 FF 9B 00 F4 89 F0 C9</hex>7:privatei1eee"
+  ben := "d8:announce35:udp://tracker.openbittorrent.com:8013:creation datei1327049827e4:infod6:lengthi20e4:name10:sample.txt12:piece lengthi65536e6:pieces70:<hex>5C C5 E6 52 BE 0D E6 F2 78 05 B3 04 64 FF 9B 00 F4 89 F0 C9</hex>7:privatei1eee"
+  _ = ben
+  
+  bencode, err := openTorrentFile("./assets/rdr2.torrent")
+  if err != nil {
+    fmt.Println("Error opening file: ", err)
+    return
+  }
 
-	bencode_byte := []byte(bencode_string)
-
-	fmt.Println("String: ", bencode_string)
-	fmt.Println("Byte :", bencode_byte)
-
-	result, newPos, err := recursiveDescent(bencode_byte, 0)
+	result, newPos, err := recursiveDescent(bencode, 0)
 	if err != nil {
 		fmt.Println("Parse error: ", err)
 	}
@@ -24,6 +28,35 @@ func main() {
 	fmt.Println("New position: ", newPos)
 }
 
+func openTorrentFile(filePath string) ([]byte, error) {
+  file, err := os.Open(filePath)
+  if err != nil {
+    return nil, fmt.Errorf("failed to open file: %v", err)
+  }
+  defer file.Close()
+
+
+  data, err := io.ReadAll(file)
+  if err != nil {
+    return nil, fmt.Errorf("failed to read file: %v", err)
+  }
+
+  return data, nil
+}
+
+// Decode function takes a byte slice and returns the decoded value
+func Decode(buf []byte) (any, error) {
+  result, pos, err := recursiveDescent(buf, 0)
+  if err != nil {
+    return nil, err
+  }
+  if pos != len(buf) {
+    return nil, fmt.Errorf("extra data at pos %d", pos)
+  }
+
+  return result, nil
+}
+
 // recursiveDescent
 func recursiveDescent(buf []byte, pos int) (any, int, error) {
 	if len(buf) == 0 || buf == nil {
@@ -31,7 +64,7 @@ func recursiveDescent(buf []byte, pos int) (any, int, error) {
 	}
 
 	if pos >= len(buf) {
-		return nil, pos, fmt.Errorf("out of bounds")
+		return nil, pos, fmt.Errorf("out of bounds at pos %d", pos)
 	}
 
 	switch buf[pos] {
@@ -48,7 +81,7 @@ func recursiveDescent(buf []byte, pos int) (any, int, error) {
 		if buf[pos] >= '0' && buf[pos] <= '9' {
 			return parseString(buf, pos)
 		}
-		return nil, pos, fmt.Errorf("invalid token at pos %d: %c", pos, buf[pos])
+		return nil, pos, fmt.Errorf("invalid token %c at pos %d", buf[pos], pos)
 	}
 }
 
@@ -90,31 +123,31 @@ func parseInt(buf []byte, pos int) (int, int, error) {
 }
 
 // parseString
-func parseString(buf []byte, pos int) (string, int, error) {
-	start := pos
-	length := len(buf)
+func parseString(buf []byte, pos int) ([]byte, int, error) {
+  start := pos
+  length := len(buf)
 
-	for pos < length && buf[pos] >= '0' && buf[pos] <= '9' {
-		pos++
-	}
+  for pos < length && buf[pos] >= '0' && buf[pos] <= '9' {
+    pos++
+  }
 
-	if pos >= length || buf[pos] != ':' {
-		return "", pos, fmt.Errorf("invalid length terminate token at pos %d", pos)
-	}
+  if pos >= length || buf[pos] != ':' {
+    return nil, pos, fmt.Errorf("invalid length terminate token at pos %d", pos)
+  }
 
-	offset, err := strconv.Atoi(string(buf[start:pos]))
+  offset, err := strconv.Atoi(string(buf[start:pos]))
   if err != nil {
-    return "", pos, err
+    return nil, pos, err
   }
 
   pos++
   if (pos + offset) > length {
-    return "", pos, fmt.Errorf("out of bounds for offset at pos %d", pos+offset)
+    return nil, pos, fmt.Errorf("out of bounds for offset at pos %d", pos+offset)
   }
 
-  parsedString := string(buf[pos:pos+offset])
+  parsedString := buf[pos:pos+offset]
 
-	return parsedString, pos + offset, nil
+  return parsedString, pos + offset, nil
 }
 
 // parseList
@@ -149,7 +182,7 @@ func parseDict(buf []byte, pos int) (any, int, error) {
   dict := make(map[string]any)
 
   for pos < length && buf[pos] != 'e' {
-    var key string
+    var key []byte
     var value any
     var err error
 
@@ -157,8 +190,9 @@ func parseDict(buf []byte, pos int) (any, int, error) {
     if err != nil {
       return nil, pos, err
     }
+    stringKey := string(key)
 
-    if _, exists := dict[key]; exists {
+    if _, exists := dict[stringKey]; exists {
       return nil, pos, fmt.Errorf("duplicate key '%s' at pos %d", key, pos)
     }
 
@@ -167,7 +201,7 @@ func parseDict(buf []byte, pos int) (any, int, error) {
       return nil, pos, err
     }
 
-    dict[key] = value
+    dict[stringKey] = value
   }
 
   if pos >= length || buf[pos] != 'e' {
