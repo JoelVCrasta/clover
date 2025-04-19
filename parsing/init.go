@@ -14,6 +14,15 @@ type Torrent struct {
 	Comment      string
 	Encoding     string
 	Info         Info
+
+	// InfoHash is the SHA-1 hash of the info dictionary
+	InfoHash [20]byte
+
+	// PiecesHash is the SHA-1 hash of each piece in the torrent
+	PiecesHash [][20]byte
+
+	// Check if the torrent is a multi-file torrent
+	IsMultiFile bool
 }
 
 type Info struct {
@@ -32,10 +41,28 @@ type File struct {
 }
 
 /*
+Init initializes the Torrent struct by loading a torrent file from the specified path.
+It returns an error if any required fields are missing or if the decoding fails.
+*/
+func (t *Torrent) Init(filePath string) error {
+	bencodeByteStream, err := t.loadTorrentFile(filePath)
+	if err != nil {
+		return fmt.Errorf("failed to load torrent file: %v", err)
+	}
+
+	err = t.populateTorrent(bencodeByteStream)
+	if err != nil {
+		return fmt.Errorf("failed to populate torrent: %v", err)
+	}
+
+	return nil
+}
+
+/*
 LoadTorrentFile loads a torrent file from the specified path.
 It returns the bencoded byte stream and an error if any occurs.
 */
-func (t Torrent) LoadTorrentFile(filePath string) ([]byte, error) {
+func (t Torrent) loadTorrentFile(filePath string) ([]byte, error) {
 	file, err := os.Open(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open file: %v", err)
@@ -55,7 +82,7 @@ Init initializes the Torrent struct by decoding the bencoded byte stream.
 It takes a byte slice as input and populates the Torrent struct fields.
 It returns an error if any required fields are missing or if the decoding fails.
 */
-func (t *Torrent) Init(bencodeByteStream []byte) error {
+func (t *Torrent) populateTorrent(bencodeByteStream []byte) error {
 	decoded, err := t.Decode(bencodeByteStream)
 	if err != nil {
 		return fmt.Errorf("%v", err)
@@ -142,6 +169,8 @@ func (t *Torrent) Init(bencodeByteStream []byte) error {
 				t.Info.Files = append(t.Info.Files, f)
 			}
 		}
+
+		t.IsMultiFile = true
 	} else {
 		return fmt.Errorf("missing required field: either info.length or info.files")
 	}
@@ -183,6 +212,21 @@ func (t *Torrent) Init(bencodeByteStream []byte) error {
 	if encoding, ok := torrent["encoding"].([]byte); ok {
 		t.Encoding = string(encoding)
 	}
+
+	// Encode the info dictionary to bencoded byte stream
+	infoEncoded, err := t.Encode(torrent["info"])
+	if err != nil {
+		return err
+	}
+	infoHash := t.HashInfoDirectory(infoEncoded)
+	t.InfoHash = infoHash
+
+	// Split the pieces into an array of 20-byte hashes
+	piecesHash, err := t.SplitPieces(t.Info.Pieces)
+	if err != nil {
+		return err
+	}
+	t.PiecesHash = piecesHash
 
 	return nil
 }
