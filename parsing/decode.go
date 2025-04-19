@@ -7,7 +7,7 @@ import (
 
 // Decode function takes a byte slice and returns the decoded value
 func (t Torrent) Decode(buf []byte) (any, error) {
-	result, pos, err := recursiveDescent(buf, 0)
+	result, pos, err := parseValue(buf, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -18,7 +18,7 @@ func (t Torrent) Decode(buf []byte) (any, error) {
 	return result, nil
 }
 
-func recursiveDescent(buf []byte, pos int) (any, int, error) {
+func parseValue(buf []byte, pos int) (any, int, error) {
 	if len(buf) == 0 || buf == nil {
 		return nil, pos, fmt.Errorf("empty buffer")
 	}
@@ -117,7 +117,7 @@ func parseList(buf []byte, pos int) ([]any, int, error) {
 		var data any
 		var err error
 
-		data, pos, err = recursiveDescent(buf, pos)
+		data, pos, err = parseValue(buf, pos)
 		if err != nil {
 			return nil, pos, err
 		}
@@ -152,7 +152,7 @@ func parseDict(buf []byte, pos int) (any, int, error) {
 			return nil, pos, fmt.Errorf("duplicate key '%s' at pos %d", key, pos)
 		}
 
-		value, pos, err = recursiveDescent(buf, pos)
+		value, pos, err = parseValue(buf, pos)
 		if err != nil {
 			return nil, pos, err
 		}
