@@ -1,3 +1,3 @@
-module github.com/JoelVCrasta/clover
+module github.com/JoelVCrasta
 
 go 1.24.1

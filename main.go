@@ -4,7 +4,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/JoelVCrasta/clover/parsing"
+	"github.com/JoelVCrasta/parsing"
 )
 
 func main() {
