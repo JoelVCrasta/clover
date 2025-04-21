@@ -11,21 +11,25 @@ GeneratePeerID generates a random peer ID for the torrent client.
 The peer ID is a 20-character string that starts with prefix "-CLOVER-".
 The next 12 bytes are random hexadecimal characters.
 */
-func GeneratePeerID() (string, error) {
+func GeneratePeerID() ([20]byte, error) {
 	const PREFIX = "-CLOVER-"
 
 	randomBytes := make([]byte, 6)
 	_, err := rand.Read(randomBytes)
 	if err != nil {
-		return "", fmt.Errorf("failed to generate random bytes: %v", err)
+		return [20]byte{}, fmt.Errorf("failed to generate random bytes: %v", err)
 	}
 
 	randomHex := hex.EncodeToString(randomBytes)
 
 	peerID := PREFIX + randomHex
+	var peerIDArray [20]byte
+
 	if len(peerID) != 20 {
-		return peerID[:20], nil
+		copy(peerIDArray[:], peerID[:20])
+		return peerIDArray, nil
 	}
 
-	return peerID, nil
+	copy(peerIDArray[:], peerID)
+	return peerIDArray, nil
 }
