@@ -97,23 +97,11 @@ func NewUDPTrackerConnection(trackerUrl string) (*Connection, error) {
 	}, nil
 }
 
-type ConnPacket [16]byte
-
-// getConnectionPacket creates a connection packet for the BitTorrent protocol.
-func getConnectionPacket() ConnPacket {
-	var cp ConnPacket
-
-	magicConstant := uint64(0x41727101980)
-	action := uint32(0)
-	transactionId := rand.Uint32()
-
-	binary.BigEndian.PutUint64(cp[0:8], magicConstant)
-	binary.BigEndian.PutUint32(cp[8:12], action)
-	binary.BigEndian.PutUint32(cp[12:16], transactionId)
-
-	return cp
-}
-
+/*
+TrackerAnnounce sends an announce request to the tracker.
+It includes the action, transaction ID, info hash, peer ID, and other parameters.
+It returns an AnnounceResponse object containing the response from the tracker.
+*/
 func (c Connection) TrackerAnnounce(arq AnnounceRequest, peerId [20]byte) (AnnounceResponse, error) {
 	arq.Action = 1
 	arq.ConnectionId = c.connectionId
@@ -153,6 +141,59 @@ func (c Connection) TrackerAnnounce(arq AnnounceRequest, peerId [20]byte) (Annou
 	return decoded, nil
 }
 
+type ScrapeRequest struct {
+	ConnectionId  uint64
+	Action        uint32
+	TransactionId uint32
+	InfoHash      [20]byte
+}
+
+type ScrapeResponse struct {
+	action        uint32
+	transactionId uint32
+	seeders       uint32
+	leechers      uint32
+	completed     uint32
+}
+
+/*
+Scrape sends a scrape request to the tracker.
+It includes the connectionID, action, transaction ID, and info hash.
+It returns a ScrapeResponse object containing the response from the tracker.
+*/
+func (c Connection) Scrape() (ScrapeResponse, error) {
+	sr := ScrapeRequest{
+		ConnectionId:  c.connectionId,
+		Action:        2,
+		TransactionId: c.transactionId,
+	}
+
+	packet := make([]byte, 32)
+	binary.BigEndian.PutUint64(packet, sr.ConnectionId)       // 8 bytes
+	binary.BigEndian.PutUint32(packet[8:], sr.Action)         // 4 bytes
+	binary.BigEndian.PutUint32(packet[12:], sr.TransactionId) // 4 bytes
+	copy(packet[16:], sr.InfoHash[:])                         // 20 bytes
+
+	n, err := c.conn.Write(packet[:])
+	if err != nil {
+		return ScrapeResponse{}, err
+	}
+	c.conn.SetDeadline(time.Now().Add(time.Second * 10))
+
+	buf := make([]byte, 1024)
+	_, err = c.conn.Read(buf)
+	if err != nil {
+		return ScrapeResponse{}, err
+	}
+
+	log.Printf("Recieved %v from scrape request\n ", n)
+
+	scrapeResponse := 
+	return scrapeResponse, nil
+
+}
+
+// decodeAnnounceResponse decodes the response from the announce request.and returns an AnnounceResponse object.
 func decodeAnnounceResponse(buf []byte, n int) AnnounceResponse {
 	peersCount := (n - 20) / 6
 	peers := make([]Peer, peersCount)
@@ -166,10 +207,41 @@ func decodeAnnounceResponse(buf []byte, n int) AnnounceResponse {
 		Peers:         peers,
 	}
 
-	for i := 0; i < peersCount; i++ {
+	for i := range peersCount {
 		peers[i].IpAddr = binary.BigEndian.Uint32(buf[20+i*6:])
 		peers[i].Port = binary.BigEndian.Uint16(buf[24+i*6:])
 	}
 
 	return arp
+}
+
+// decodeScrapeResponse decodes the response from the scrape request and returns a ScrapeResponse object.
+func decodeScrapeResponse(buf []byte, n int) ScrapeResponse {
+	sr := ScrapeResponse{
+		action:        binary.BigEndian.Uint32(buf),
+		transactionId: binary.BigEndian.Uint32(buf[4:]),
+		seeders:       binary.BigEndian.Uint32(buf[8:]),
+		leechers:      binary.BigEndian.Uint32(buf[12:]),
+		completed:     binary.BigEndian.Uint32(buf[16:]),
+	}
+	
+	return sr
+}
+
+
+type ConnPacket [16]byte
+
+// getConnectionPacket creates a connection packet for the BitTorrent protocol.
+func getConnectionPacket() ConnPacket {
+	var cp ConnPacket
+
+	magicConstant := uint64(0x41727101980)
+	action := uint32(0)
+	transactionId := rand.Uint32()
+
+	binary.BigEndian.PutUint64(cp[0:8], magicConstant)
+	binary.BigEndian.PutUint32(cp[8:12], action)
+	binary.BigEndian.PutUint32(cp[12:16], transactionId)
+
+	return cp
 }
