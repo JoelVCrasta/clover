@@ -188,9 +188,8 @@ func (c Connection) Scrape() (ScrapeResponse, error) {
 
 	log.Printf("Recieved %v from scrape request\n ", n)
 
-	scrapeResponse := 
+	scrapeResponse := decodeScrapeResponse(buf)
 	return scrapeResponse, nil
-
 }
 
 // decodeAnnounceResponse decodes the response from the announce request.and returns an AnnounceResponse object.
@@ -216,7 +215,7 @@ func decodeAnnounceResponse(buf []byte, n int) AnnounceResponse {
 }
 
 // decodeScrapeResponse decodes the response from the scrape request and returns a ScrapeResponse object.
-func decodeScrapeResponse(buf []byte, n int) ScrapeResponse {
+func decodeScrapeResponse(buf []byte) ScrapeResponse {
 	sr := ScrapeResponse{
 		action:        binary.BigEndian.Uint32(buf),
 		transactionId: binary.BigEndian.Uint32(buf[4:]),
@@ -224,10 +223,9 @@ func decodeScrapeResponse(buf []byte, n int) ScrapeResponse {
 		leechers:      binary.BigEndian.Uint32(buf[12:]),
 		completed:     binary.BigEndian.Uint32(buf[16:]),
 	}
-	
+
 	return sr
 }
-
 
 type ConnPacket [16]byte
 
