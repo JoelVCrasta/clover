@@ -43,4 +43,10 @@ func TestTracker(t *testing.T) {
 	log.Println("Announce Response:", response)
 
 	log.Println(response.Peers)
+
+	peerRes, err := torrent.NewHandshake(testRequest.InfoHash, peerId, response.Peers[0].IpAddr, response.Peers[0].Port)
+	if err != nil {
+		t.Fatalf("Failed to create handshake: %v", err)
+	}
+	log.Println("Handshake Response:", peerRes)
 }
