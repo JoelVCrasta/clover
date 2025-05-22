@@ -1,8 +1,10 @@
 package parsing
 
 import (
+	"encoding/hex"
 	"fmt"
 	"io"
+	"log"
 	"os"
 )
 
@@ -227,6 +229,11 @@ func (t *Torrent) populateTorrent(bencodeByteStream []byte) error {
 		return err
 	}
 	t.PiecesHash = piecesHash
+
+	log.Println("Announce: ", t.Announce)
+	//log.Println("Announce list: ", t.AnnounceList)
+	log.Println("infoHash: ", t.InfoHash)
+	fmt.Println("Hex Info Hash: ", hex.EncodeToString(t.InfoHash[:]))
 
 	return nil
 }

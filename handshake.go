@@ -17,8 +17,12 @@ type Handshake struct {
 
 func NewHandshake(infoHash, peerId [20]byte, peerIp uint32, peerPort uint16) (*Handshake, error) {
 	request := getHandshakePayload(infoHash, peerId)
+	
 	ip := net.IPv4(byte(peerIp>>24), byte(peerIp>>16), byte(peerIp>>8), byte(peerIp))
 	peerAddress := net.JoinHostPort(ip.String(), strconv.Itoa(int(peerPort)))
+
+	log.Println("Peer address:", peerAddress)
+	log.Println("Handshake request:", request)
 
 	conn, err := net.Dial("tcp", peerAddress)
 	if err != nil {
