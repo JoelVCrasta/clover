@@ -1,4 +1,4 @@
-package torrent
+package tracker
 
 import (
 	"encoding/binary"
@@ -42,7 +42,7 @@ type AnnounceResponse struct {
 }
 
 type Peer struct {
-	IpAddr uint32
+	IpAddr net.IP
 	Port   uint16
 }
 
@@ -225,8 +225,10 @@ func (a *AnnounceResponse) decodeAnnounceResponse(buf []byte, n int) {
 	a.Peers = peers
 
 	for i := range peersCount {
-		a.Peers[i].IpAddr = binary.BigEndian.Uint32(buf[20+i*6:])
-		a.Peers[i].Port = binary.BigEndian.Uint16(buf[24+i*6:])
+		offset := i * 6
+
+		a.Peers[i].IpAddr = net.IP(buf[20+offset:20+offset+4])
+		a.Peers[i].Port = binary.BigEndian.Uint16(buf[24+offset:])
 	}
 }
 
@@ -248,9 +250,6 @@ func getConnectionPacket() ConnPacket {
 	magicConstant := uint64(0x41727101980)
 	action := uint32(0)
 	transactionId := rand.Uint32()
-
-
-	log.Println("Connect transactionId:", transactionId)
 
 	binary.BigEndian.PutUint64(cp[0:8], magicConstant)
 	binary.BigEndian.PutUint32(cp[8:12], action)
