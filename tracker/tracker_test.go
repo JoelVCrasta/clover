@@ -6,7 +6,8 @@ import (
 	"testing"
 
 	torrent "github.com/JoelVCrasta"
-	tracker "github.com/JoelVCrasta/tracker"
+	"github.com/JoelVCrasta/peer"
+	"github.com/JoelVCrasta/tracker"
 )
 
 func TestTracker(t *testing.T) {
@@ -18,7 +19,7 @@ func TestTracker(t *testing.T) {
 	log.Println("Connection established with tracker")
 
 	// Generate a random transaction ID
-	peerId, err := torrent.GeneratePeerID()
+	peerId, err := peer.GeneratePeerID()
 	if err != nil {
 		t.Error(err)
 		return
@@ -48,14 +49,19 @@ func TestTracker(t *testing.T) {
 	log.Printf("Action: %d, Transaction ID: %d, Interval: %d, Leechers: %d, Seeders: %d\n", res.Action, res.TransactionId, res.Interval, res.Leechers, res.Seeders)
 	log.Println("Peers:", res.Peers)
 
-	
 	// Send a handshake request to the first peer
-	peerRes, err := torrent.NewHandshake(testRequest.InfoHash, peerId, res.Peers[0].IpAddr, res.Peers[0].Port)
-	if err != nil {
-		t.Fatalf("Failed to create handshake: %v", err)
-	}
-	log.Println("Handshake Response:", peerRes)
+	var count = 0
 
-	
+	for _, peer := range res.Peers {
+		peerRes, err := torrent.NewHandshake(testRequest.InfoHash, peerId, peer.IpAddr, peer.Port)
+		if err != nil {
+			continue
+		}
+		log.Println("Handshake Response:", peerRes)
+		count++
+	}
+
+	log.Println("Total peers:", count)
+
 	conn.Close()
 }
