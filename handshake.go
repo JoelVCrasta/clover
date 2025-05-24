@@ -5,6 +5,8 @@ import (
 	"net"
 	"strconv"
 	"time"
+
+	"github.com/JoelVCrasta/config"
 )
 
 type Handshake struct {
@@ -15,24 +17,22 @@ type Handshake struct {
 	PeerId   [20]byte
 }
 
-func NewHandshake(infoHash, peerId [20]byte, peerIp uint32, peerPort uint16) (*Handshake, error) {
+func NewHandshake(infoHash, peerId [20]byte, peerIp net.IP, peerPort uint16) (net.Conn, *Handshake, error) {
 	request := getHandshakePayload(infoHash, peerId)
-	
-	ip := net.IPv4(byte(peerIp>>24), byte(peerIp>>16), byte(peerIp>>8), byte(peerIp))
-	peerAddress := net.JoinHostPort(ip.String(), strconv.Itoa(int(peerPort)))
+
+	peerAddress := net.JoinHostPort(peerIp.String(), strconv.Itoa(int(peerPort)))
 
 	log.Println("Peer address:", peerAddress)
-	log.Println("Handshake request:", request)
 
-	conn, err := net.Dial("tcp", peerAddress)
+	conn, err := net.DialTimeout("tcp", peerAddress, config.Config.PeerHandshakeTimeout)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	defer conn.Close()
 
 	_, err = conn.Write(request)
 	if err != nil {
-		return nil, err
+		conn.Close()
+		return nil, nil, err
 	}
 
 	conn.SetDeadline(time.Now().Add(time.Second * 10))
@@ -40,23 +40,21 @@ func NewHandshake(infoHash, peerId [20]byte, peerIp uint32, peerPort uint16) (*H
 	buf := make([]byte, 68)
 	_, err = conn.Read(buf)
 	if err != nil {
-		return nil, err
+		conn.Close()
+		return nil, nil, err
 	}
-
-	log.Println("Handshake response:", buf)
 
 	var h Handshake
 	h.decodeHandshakeResponse(buf)
-	return &h, nil
+	return conn, &h, nil
 }
 
 func getHandshakePayload(infoHash, peerId [20]byte) []byte {
 	handshake := make([]byte, 68)
-	reserved := [8]byte{}
 
 	handshake[0] = 19
-	copy(handshake[1:], []byte("BitTorrent protocol"))
-	copy(handshake[20:], reserved[:])
+	copy(handshake[1:], "BitTorrent protocol")
+	copy(handshake[20:], make([]byte, 8))
 	copy(handshake[28:], infoHash[:])
 	copy(handshake[48:], peerId[:])
 
