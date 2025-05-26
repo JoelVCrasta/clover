@@ -42,4 +42,18 @@ var payloadSize = map[MessageId]int{
 
 // KeepAlive is to send to peer to keep the connection alive
 var KeepAlive = []byte{0, 0, 0, 0}
- 
+
+type Message struct {
+	LengthPrefix int
+	MessageId    MessageId
+	Payload      []byte
+}
+
+func (m *Message) NewMessage(id MessageId, payload []byte) *Message {
+	return &Message{
+		LengthPrefix: lengthPrefix[id] + len(payload),
+		MessageId:    id,
+		Payload:      payload,
+	}
+}
+

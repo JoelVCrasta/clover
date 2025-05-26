@@ -4,24 +4,26 @@ import (
 	"encoding/binary"
 	"net"
 	"sync"
+	"time"
 )
 
 // Client represents a torrent client that manages connections to peers and downloads pieces of the torrent.
 type Client struct {
 	InfoHash    [20]byte
-	Peers       []*PeerInfo
+	ActivePeers []*ActivePeer
 	PieceLength int
 	TotalLength int
+	StartTime   time.Time
 
-	Pieces     []Piece
 	PieceQueue chan int
 	Downloaded map[int]bool
+	Requested  map[int]bool
 
 	Mutex sync.Mutex
 }
 
 // PeerInfo represents information about a peer connected to clover.
-type PeerInfo struct {
+type ActivePeer struct {
 	IpAddr   net.IP
 	Port     uint16
 	Conn     net.Conn
@@ -30,13 +32,20 @@ type PeerInfo struct {
 	Bitfield Bitfield
 }
 
-type Piece struct {
-	Index int
-	Hash  [20]byte
-	Size  int
+func GetBitfieldFromPeer(conn net.Conn) (Bitfield, error) {
+	id, payload, err := ReadMessage(conn)
+	if err != nil {
+		return nil, err
+	}
 
-	Data       []byte
-	Downloaded bool
+	if id != byte(BitfieldId) {
+		return nil, nil // Not a Bitfield message
+	}
+
+	bitfield := make(Bitfield, len(payload))
+	copy(bitfield, payload)
+
+	return bitfield, nil
 }
 
 /*
