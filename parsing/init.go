@@ -5,17 +5,19 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/url"
 	"os"
 )
 
 type Torrent struct {
 	Announce     string
-	AnnounceList [][]string
+	AnnounceList []string
 	CreatedBy    string
 	CreationDate int
 	Comment      string
 	Encoding     string
 	Info         Info
+	PieceCount   int
 
 	// InfoHash is the SHA-1 hash of the info dictionary
 	InfoHash [20]byte
@@ -177,20 +179,28 @@ func (t *Torrent) populateTorrent(bencodeByteStream []byte) error {
 		return fmt.Errorf("missing required field: either info.length or info.files")
 	}
 
-	// Optional: announce-list
+	// Required: announce-list
 	if announceList, ok := torrent["announce-list"].([]any); ok {
 		for _, tier := range announceList {
-			if tierList, ok := tier.([]any); ok {
-				var trackers []string
-
-				for _, item := range tierList {
+			if tracker, ok := tier.([]any); ok {
+				for _, item := range tracker {
 					if str, ok := item.([]byte); ok {
-						trackers = append(trackers, string(str))
+						parsed, err := url.Parse(string(str))
+						if err != nil {
+							return fmt.Errorf("invalid announce-list entry: %v", err)
+						}
+
+						if parsed.Scheme == "udp" {
+							t.AnnounceList = append(t.AnnounceList, parsed.Host)
+						}
+
+					} else {
+						return fmt.Errorf("invalid announce-list entry")
 					}
 				}
-				if len(trackers) > 0 {
-					t.AnnounceList = append(t.AnnounceList, trackers)
-				}
+
+			} else {
+				return fmt.Errorf("invalid announce-list format")
 			}
 		}
 	}
@@ -229,6 +239,8 @@ func (t *Torrent) populateTorrent(bencodeByteStream []byte) error {
 		return err
 	}
 	t.PiecesHash = piecesHash
+
+	t.PieceCount = len(t.Info.Pieces) / 20
 
 	log.Println("Announce: ", t.Announce)
 	//log.Println("Announce list: ", t.AnnounceList)
