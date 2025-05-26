@@ -5,18 +5,34 @@ import (
 	"math/rand/v2"
 	"testing"
 
-	torrent "github.com/JoelVCrasta"
+	"github.com/JoelVCrasta/parsing"
 	"github.com/JoelVCrasta/peer"
 	"github.com/JoelVCrasta/tracker"
 )
 
 func TestTracker(t *testing.T) {
+	var data parsing.Torrent
 
-	conn, err := tracker.NewUDPTrackerConnection("tracker.opentrackr.org:1337") // opentor.net:6969
+	err := data.Init("../assets/arch.torrent")
 	if err != nil {
-		t.Fatalf("Failed to create UDP tracker connection: %v", err)
+		t.Fatalf("Failed to initialize torrent (%v)", err)
 	}
-	log.Println("Connection established with tracker")
+
+	log.Println(data.AnnounceList)
+
+	// Connect to a tracker
+	var conn *tracker.Connection
+	for _, announce := range data.AnnounceList {
+		tempConn, err := tracker.NewUDPTrackerConnection(announce) // opentor.net:6969
+		if err != nil {
+			t.Errorf("Failed to create UDP tracker connection: %v", err)
+			continue
+		}
+
+		conn = tempConn
+		t.Log("Connection established with tracker")
+		break
+	}
 
 	// Generate a random transaction ID
 	peerId, err := peer.GeneratePeerID()
@@ -24,14 +40,12 @@ func TestTracker(t *testing.T) {
 		t.Error(err)
 		return
 	}
-
-	log.Println("Generated Peer ID:", peerId)
-	log.Println("Peer ID string:", string(peerId[:]))
+	t.Log("Peer ID:", string(peerId[:]))
 
 	// Create a new announce request
 	testRequest := tracker.AnnounceRequest{
 		Key:        rand.Uint32(),
-		InfoHash:   [20]byte{53, 253, 194, 188, 211, 197, 66, 97, 84, 53, 232, 149, 165, 210, 43, 91, 143, 236, 112, 25},
+		InfoHash:   data.InfoHash,
 		IpAddr:     0,
 		Port:       6881,
 		Uploaded:   0,
@@ -46,22 +60,9 @@ func TestTracker(t *testing.T) {
 		t.Fatalf("Failed to send announce request: %v", err)
 	}
 
-	log.Printf("Action: %d, Transaction ID: %d, Interval: %d, Leechers: %d, Seeders: %d\n", res.Action, res.TransactionId, res.Interval, res.Leechers, res.Seeders)
-	log.Println("Peers:", res.Peers)
+	t.Logf("Action: %d, Transaction ID: %d, Interval: %d, Leechers: %d, Seeders: %d\n", res.Action, res.TransactionId, res.Interval, res.Leechers, res.Seeders)
+	t.Log("Peers:", res.Peers)
 
-	// Send a handshake request to the first peer
-	var count = 0
-
-	for _, peer := range res.Peers {
-		peerRes, err := torrent.NewHandshake(testRequest.InfoHash, peerId, peer.IpAddr, peer.Port)
-		if err != nil {
-			continue
-		}
-		log.Println("Handshake Response:", peerRes)
-		count++
-	}
-
-	log.Println("Total peers:", count)
-
+	// Close all the connections
 	conn.Close()
 }
