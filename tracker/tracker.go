@@ -87,7 +87,7 @@ func NewUDPTrackerConnection(trackerUrl string) (*Connection, error) {
 	transactionId := binary.BigEndian.Uint32(buf[4:])
 	connectionId := binary.BigEndian.Uint64(buf[8:])
 
-	log.Printf("Recieved %v from tracker connection request: %x \n", n, buf[:n])
+	log.Printf("Recieved %v bytes from tracker connection request\n", n)
 	log.Printf("Response from server, Action: %d, transactionId: %d, connectionId: %d\n", action, transactionId, connectionId)
 
 	return &Connection{
@@ -96,7 +96,6 @@ func NewUDPTrackerConnection(trackerUrl string) (*Connection, error) {
 		transactionId: transactionId,
 	}, nil
 }
-
 
 // Close closes the UDP connection to the tracker.
 func (c *Connection) Close() {
@@ -112,14 +111,11 @@ It includes the action, transaction ID, info hash, peer ID, and other parameters
 It returns an AnnounceResponse object containing the response from the tracker.
 */
 func (c Connection) TrackerAnnounce(arq AnnounceRequest, peerId [20]byte) (*AnnounceResponse, error) {
-	
+
 	arq.Action = 1
 	arq.ConnectionId = c.connectionId
 	arq.TransactionId = rand.Uint32()
 	arq.PeerId = peerId
-
-	log.Println("connectionId:", arq.ConnectionId)
-	log.Println("transactionId:", arq.TransactionId)
 
 	packet := make([]byte, 98)
 	binary.BigEndian.PutUint64(packet, arq.ConnectionId)       // 8 bytes
@@ -137,7 +133,6 @@ func (c Connection) TrackerAnnounce(arq AnnounceRequest, peerId [20]byte) (*Anno
 	binary.BigEndian.PutUint16(packet[96:], arq.Port)          // 2 bytes
 
 	log.Println("Announce packet:", packet[:])
-	log.Println("Announce packet length:", len(packet[:]))
 
 	n, err := c.conn.Write(packet[:])
 	if err != nil {
@@ -151,8 +146,7 @@ func (c Connection) TrackerAnnounce(arq AnnounceRequest, peerId [20]byte) (*Anno
 		return nil, err
 	}
 
-	log.Printf("Recieved %v from announce request\n ", n)
-	log.Printf("Raw announce response bytes (%d): %s\n", n, buf[:n])
+	log.Printf("Recieved %v bytes from announce request\n ", n)
 
 	var a AnnounceResponse
 	a.decodeAnnounceResponse(buf, n)
@@ -185,7 +179,6 @@ func (c Connection) Scrape() (*ScrapeResponse, error) {
 		Action:        2,
 		TransactionId: c.transactionId,
 	}
-	
 
 	packet := make([]byte, 32)
 	binary.BigEndian.PutUint64(packet, sr.ConnectionId)       // 8 bytes
@@ -227,7 +220,7 @@ func (a *AnnounceResponse) decodeAnnounceResponse(buf []byte, n int) {
 	for i := range peersCount {
 		offset := i * 6
 
-		a.Peers[i].IpAddr = net.IP(buf[20+offset:20+offset+4])
+		a.Peers[i].IpAddr = net.IP(buf[20+offset : 20+offset+4])
 		a.Peers[i].Port = binary.BigEndian.Uint16(buf[24+offset:])
 	}
 }
