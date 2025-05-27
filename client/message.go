@@ -1,5 +1,7 @@
 package client
 
+import "encoding/binary"
+
 // <lengthPrefix : 4 bytes> <messageId : 1 byte> <payload : variable size>
 type MessageId int
 
@@ -49,7 +51,8 @@ type Message struct {
 	Payload      []byte
 }
 
-func (m *Message) NewMessage(id MessageId, payload []byte) *Message {
+// NewMessage creates a new message with the given id and payload.
+func NewMessage(id MessageId, payload []byte) *Message {
 	return &Message{
 		LengthPrefix: lengthPrefix[id] + len(payload),
 		MessageId:    id,
@@ -57,3 +60,40 @@ func (m *Message) NewMessage(id MessageId, payload []byte) *Message {
 	}
 }
 
+// encodeMessage encodes the message into a byte slice.
+func (m *Message) encodeMessage() []byte {
+	buf := make([]byte, 4+m.LengthPrefix)
+
+	binary.BigEndian.PutUint32(buf, uint32(m.LengthPrefix))
+	buf[4] = byte(m.MessageId)
+	if m.Payload != nil {
+		copy(buf[5:], m.Payload)
+	}
+
+	return buf
+}
+
+// decodeMessage reads a message from the given byte slice.
+func (m *Message) decodeMessage(buf []byte) {
+	m.LengthPrefix = int(binary.BigEndian.Uint32(buf[:4]))
+
+	if m.LengthPrefix == 0 {
+		return // KeepAlive message
+	}
+
+	m.MessageId = MessageId(buf[4])
+
+	var size int
+	if s, ok := payloadSize[m.MessageId]; ok {
+		size = s
+	} else {
+		size = m.LengthPrefix - 1
+	}
+
+	if size > 0 {
+		m.Payload = make([]byte, size)
+		copy(m.Payload, buf[5:5+size])
+	} else {
+		m.Payload = nil
+	}
+}
