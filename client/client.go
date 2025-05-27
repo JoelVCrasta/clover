@@ -75,3 +75,65 @@ func ReadMessage(conn net.Conn) (id byte, payload []byte, err error) {
 
 	return id, payload, nil
 }
+
+func (c *Client) SendChoke(peer *ActivePeer) error {
+	message := NewMessage(ChokeId, nil)
+	_, err := peer.Conn.Write(message.encodeMessage())
+
+	return err
+}
+
+func (c *Client) SendUnchoke(peer *ActivePeer) error {
+	message := NewMessage(UnchokeId, nil)
+	_, err := peer.Conn.Write(message.encodeMessage())
+
+	return err
+}
+
+func (c *Client) SendInterested(peer *ActivePeer) error {
+	message := NewMessage(InterestedId, nil)
+	_, err := peer.Conn.Write(message.encodeMessage())
+
+	return err
+}
+
+func (c *Client) SendNotInterested(peer *ActivePeer) error {
+	message := NewMessage(NotInterestedId, nil)
+	_, err := peer.Conn.Write(message.encodeMessage())
+
+	return err
+}
+
+func (c *Client) SendHave(peer *ActivePeer, pieceIndex int) error {
+	payload := make([]byte, 4)
+	binary.BigEndian.PutUint32(payload, uint32(pieceIndex))
+
+	message := NewMessage(HaveId, payload)
+	_, err := peer.Conn.Write(message.encodeMessage())
+
+	return err
+}
+
+func (c *Client) SendRequest(peer *ActivePeer, pieceIndex, offset, length int) error {
+	payload := make([]byte, 12)
+	binary.BigEndian.PutUint32(payload[0:4], uint32(pieceIndex))
+	binary.BigEndian.PutUint32(payload[4:8], uint32(offset))
+	binary.BigEndian.PutUint32(payload[8:12], uint32(length))
+
+	message := NewMessage(RequestId, payload)
+	_, err := peer.Conn.Write(message.encodeMessage())
+
+	return err
+}
+
+func (c *Client) SendCancel(peer *ActivePeer, pieceIndex, offset, length int) error {
+	payload := make([]byte, 12)
+	binary.BigEndian.PutUint32(payload[0:4], uint32(pieceIndex))
+	binary.BigEndian.PutUint32(payload[4:8], uint32(offset))
+	binary.BigEndian.PutUint32(payload[8:12], uint32(length))
+
+	message := NewMessage(CancelId, payload)
+	_, err := peer.Conn.Write(message.encodeMessage())
+
+	return err
+}
