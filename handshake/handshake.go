@@ -1,4 +1,4 @@
-package torrent
+package handshake
 
 import (
 	"log"
@@ -17,6 +17,11 @@ type Handshake struct {
 	PeerId   [20]byte
 }
 
+/*
+NewHandshake establishes a TCP connection to a peer and performs the BitTorrent handshake.
+It sends a handshake request containing the info hash and peer ID, and waits for a response.
+It returns the connection, the handshake response, and any error encountered.
+*/
 func NewHandshake(infoHash, peerId [20]byte, peerIp net.IP, peerPort uint16) (net.Conn, *Handshake, error) {
 	request := getHandshakePayload(infoHash, peerId)
 
@@ -49,6 +54,7 @@ func NewHandshake(infoHash, peerId [20]byte, peerIp net.IP, peerPort uint16) (ne
 	return conn, &h, nil
 }
 
+// getHandshakePayload constructs the handshake payload.
 func getHandshakePayload(infoHash, peerId [20]byte) []byte {
 	handshake := make([]byte, 68)
 
@@ -61,6 +67,7 @@ func getHandshakePayload(infoHash, peerId [20]byte) []byte {
 	return handshake
 }
 
+// decodeHandshakeResponse decodes the handshake response from the peer.
 func (h *Handshake) decodeHandshakeResponse(buf []byte) {
 	h.Pstrlen = buf[0]
 	h.Pstr = string(buf[1:20])
