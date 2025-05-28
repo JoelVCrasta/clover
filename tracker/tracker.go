@@ -7,6 +7,8 @@ import (
 	"math/rand"
 	"net"
 	"time"
+
+	"github.com/JoelVCrasta/config"
 )
 
 type Connection struct {
@@ -74,7 +76,7 @@ func NewUDPTrackerConnection(trackerUrl string) (*Connection, error) {
 		return nil, err
 	}
 
-	conn.SetDeadline(time.Now().Add(5 * time.Second))
+	conn.SetDeadline(time.Now().Add(config.Config.TrackerConnectTimeout))
 	buf := make([]byte, 32)
 	n, err := conn.Read(buf)
 
@@ -138,7 +140,7 @@ func (c Connection) TrackerAnnounce(arq AnnounceRequest, peerId [20]byte) (*Anno
 	if err != nil {
 		return nil, err
 	}
-	c.conn.SetDeadline(time.Now().Add(time.Second * 10))
+	c.conn.SetDeadline(time.Now().Add(config.Config.TrackerConnectTimeout))
 
 	buf := make([]byte, 1024)
 	_, err = c.conn.Read(buf)
@@ -190,7 +192,7 @@ func (c Connection) Scrape() (*ScrapeResponse, error) {
 	if err != nil {
 		return nil, err
 	}
-	c.conn.SetDeadline(time.Now().Add(time.Second * 10))
+	c.conn.SetDeadline(time.Now().Add(config.Config.TrackerConnectTimeout))
 
 	buf := make([]byte, 1024)
 	_, err = c.conn.Read(buf)
