@@ -15,17 +15,10 @@ import (
 
 // Client represents a torrent client that manages connections to peers and downloads pieces of the torrent.
 type Client struct {
-	InfoHash    [20]byte
 	ActivePeers []*ActivePeer
-	PieceLength int
-	TotalLength int
-	StartTime   time.Time
+	Torrent     parsing.Torrent
 
-	PieceQueue chan int
-	Downloaded map[int]bool
-	Requested  map[int]bool
-
-	Mutex sync.Mutex
+	StartTime time.Time
 }
 
 // PeerInfo represents information about a peer connected to clover.
@@ -38,18 +31,15 @@ type ActivePeer struct {
 	Bitfield Bitfield
 }
 
+/*
+NewClient initializes a new torrent client with the given torrent and peers.
+It connects to each peer, performs a handshake, and retrieves the bitfield from each peer.
+It returns a pointer to the Client and an error if any occurred during the process.
+*/
 func NewClient(torrent parsing.Torrent, peers []tracker.Peer, peerId [20]byte) (*Client, error) {
 	c := &Client{
-		InfoHash:    torrent.InfoHash,
-		PieceLength: torrent.Info.PieceLength,
-		TotalLength: torrent.Info.Length,
-		StartTime:   time.Now(),
-
-		PieceQueue: make(chan int, torrent.PieceCount),
-		Downloaded: make(map[int]bool),
-		Requested:  make(map[int]bool),
-
-		Mutex: sync.Mutex{},
+		Torrent:   torrent,
+		StartTime: time.Now(),
 	}
 
 	var (
@@ -147,64 +137,64 @@ func ReadMessage(conn net.Conn) (id byte, payload []byte, err error) {
 	return id, payload, nil
 }
 
-func (c *Client) SendChoke(peer *ActivePeer) error {
+func (ap *ActivePeer) SendChoke() error {
 	message := NewMessage(ChokeId, nil)
-	_, err := peer.Conn.Write(message.encodeMessage())
+	_, err := ap.Conn.Write(message.encodeMessage())
 
 	return err
 }
 
-func (c *Client) SendUnchoke(peer *ActivePeer) error {
+func (ap *ActivePeer) SendUnchoke() error {
 	message := NewMessage(UnchokeId, nil)
-	_, err := peer.Conn.Write(message.encodeMessage())
+	_, err := ap.Conn.Write(message.encodeMessage())
 
 	return err
 }
 
-func (c *Client) SendInterested(peer *ActivePeer) error {
+func (ap *ActivePeer) SendInterested() error {
 	message := NewMessage(InterestedId, nil)
-	_, err := peer.Conn.Write(message.encodeMessage())
+	_, err := ap.Conn.Write(message.encodeMessage())
 
 	return err
 }
 
-func (c *Client) SendNotInterested(peer *ActivePeer) error {
+func (ap *ActivePeer) SendNotInterested() error {
 	message := NewMessage(NotInterestedId, nil)
-	_, err := peer.Conn.Write(message.encodeMessage())
+	_, err := ap.Conn.Write(message.encodeMessage())
 
 	return err
 }
 
-func (c *Client) SendHave(peer *ActivePeer, pieceIndex int) error {
+func (ap *ActivePeer) SendHave(pieceIndex int) error {
 	payload := make([]byte, 4)
 	binary.BigEndian.PutUint32(payload, uint32(pieceIndex))
 
 	message := NewMessage(HaveId, payload)
-	_, err := peer.Conn.Write(message.encodeMessage())
+	_, err := ap.Conn.Write(message.encodeMessage())
 
 	return err
 }
 
-func (c *Client) SendRequest(peer *ActivePeer, pieceIndex, offset, length int) error {
+func (ap *ActivePeer) SendRequest(pieceIndex, offset, length int) error {
 	payload := make([]byte, 12)
 	binary.BigEndian.PutUint32(payload[0:4], uint32(pieceIndex))
 	binary.BigEndian.PutUint32(payload[4:8], uint32(offset))
 	binary.BigEndian.PutUint32(payload[8:12], uint32(length))
 
 	message := NewMessage(RequestId, payload)
-	_, err := peer.Conn.Write(message.encodeMessage())
+	_, err := ap.Conn.Write(message.encodeMessage())
 
 	return err
 }
 
-func (c *Client) SendCancel(peer *ActivePeer, pieceIndex, offset, length int) error {
+func (ap *ActivePeer) SendCancel(pieceIndex, offset, length int) error {
 	payload := make([]byte, 12)
 	binary.BigEndian.PutUint32(payload[0:4], uint32(pieceIndex))
 	binary.BigEndian.PutUint32(payload[4:8], uint32(offset))
 	binary.BigEndian.PutUint32(payload[8:12], uint32(length))
 
 	message := NewMessage(CancelId, payload)
-	_, err := peer.Conn.Write(message.encodeMessage())
+	_, err := ap.Conn.Write(message.encodeMessage())
 
 	return err
 }
