@@ -13,7 +13,7 @@ import (
 func TestTracker(t *testing.T) {
 	var data parsing.Torrent
 
-	err := data.Init("../assets/arch.torrent")
+	err := data.Torrent("../assets/arch.torrent")
 	if err != nil {
 		t.Fatalf("Failed to initialize torrent (%v)", err)
 	}
