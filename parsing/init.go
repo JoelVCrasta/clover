@@ -17,7 +17,6 @@ type Torrent struct {
 	Comment      string
 	Encoding     string
 	Info         Info
-	PieceCount   int
 
 	// InfoHash is the SHA-1 hash of the info dictionary
 	InfoHash [20]byte
@@ -48,7 +47,7 @@ type File struct {
 Init initializes the Torrent struct by loading a torrent file from the specified path.
 It returns an error if any required fields are missing or if the decoding fails.
 */
-func (t *Torrent) Init(filePath string) error {
+func (t *Torrent) Torrent(filePath string) error {
 	bencodeByteStream, err := t.loadTorrentFile(filePath)
 	if err != nil {
 		return fmt.Errorf("failed to load torrent file: %v", err)
@@ -174,6 +173,7 @@ func (t *Torrent) populateTorrent(bencodeByteStream []byte) error {
 			}
 		}
 
+		t.Info.Length = t.calulateMultiFileLength()
 		t.IsMultiFile = true
 	} else {
 		return fmt.Errorf("missing required field: either info.length or info.files")
@@ -240,12 +240,19 @@ func (t *Torrent) populateTorrent(bencodeByteStream []byte) error {
 	}
 	t.PiecesHash = piecesHash
 
-	t.PieceCount = len(t.Info.Pieces) / 20
-
 	log.Println("Announce: ", t.Announce)
 	//log.Println("Announce list: ", t.AnnounceList)
 	log.Println("infoHash: ", t.InfoHash)
-	fmt.Println("Hex Info Hash: ", hex.EncodeToString(t.InfoHash[:]))
+	log.Println("Hex Info Hash: ", hex.EncodeToString(t.InfoHash[:]))
 
 	return nil
+}
+
+func (t Torrent) calulateMultiFileLength() int {
+	totalLength := 0
+
+	for _, file := range t.Info.Files {
+		totalLength += file.Length
+	}
+	return totalLength
 }
