@@ -1,8 +1,10 @@
 package client
 
 import (
+	"bufio"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"sync"
@@ -93,49 +95,56 @@ func NewClient(torrent parsing.Torrent, peers []tracker.Peer, peerId [20]byte) (
 	return c, nil
 }
 
+// GetBitfieldFromPeer reads the bitfield message right after the handshake done with the peer.
 func GetBitfieldFromPeer(conn net.Conn) (Bitfield, error) {
-	id, payload, err := ReadMessage(conn)
+	msg, err := readMessage(conn)
 	if err != nil {
 		return nil, err
 	}
 
-	if id != byte(BitfieldId) {
-		return nil, nil // Not a Bitfield message
+	if msg.MessageId != BitfieldId {
+		return nil, fmt.Errorf("expected Bitfield message, got %v", msg.MessageId)
 	}
 
-	bitfield := make(Bitfield, len(payload))
-	copy(bitfield, payload)
+	bitfield := make(Bitfield, len(msg.Payload))
+	copy(bitfield, msg.Payload)
 
 	return bitfield, nil
 }
 
 /*
-readMessage reads a message from the given connection.
+decodeMessage reads a message from the given connection.
 It checks the length of the message, if the length is 0, it returns a KeepAlive message.
-If the length is greater than 0, it reads the message and returns the message ID and payload.
+If the length is greater than 0, then it is decoded into a Message struct.
 */
-func ReadMessage(conn net.Conn) (id byte, payload []byte, err error) {
+func readMessage(conn net.Conn) (*Message, error) {
+	reader := bufio.NewReader(conn)
 	lengthBuf := make([]byte, 4)
 
-	if _, err = conn.Read(lengthBuf); err != nil {
-		return 0, nil, err
+	if _, err := io.ReadFull(reader, lengthBuf); err != nil {
+		return nil, err
 	}
 
 	length := binary.BigEndian.Uint32(lengthBuf)
 	if length == 0 {
-		return 0, nil, nil // KeepAlive message
+		return nil, nil // KeepAlive message
 	}
 
 	msg := make([]byte, length)
-	if _, err = conn.Read(msg); err != nil {
-		return
+	if _, err := io.ReadFull(reader, msg); err != nil {
+		return nil, err
 	}
 
-	id = msg[0]
-	payload = msg[1:]
+	fullMessage := make([]byte, 4+length)
+	copy(fullMessage, lengthBuf)
+	copy(fullMessage[4:], msg)
 
-	return id, payload, nil
+	var message Message
+	message.decodeMessage(fullMessage)
+	return &message, nil
 }
+
+// ------------ Messages ------------
 
 func (ap *ActivePeer) SendChoke() error {
 	message := NewMessage(ChokeId, nil)
