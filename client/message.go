@@ -84,10 +84,10 @@ func (m *Message) decodeMessage(buf []byte) {
 	m.MessageId = MessageId(buf[4])
 
 	var size int
-	if s, ok := payloadSize[m.MessageId]; ok {
-		size = s
-	} else {
+	if m.MessageId == PieceId || m.MessageId == BitfieldId {
 		size = m.LengthPrefix - 1
+	} else {
+		size = payloadSize[m.MessageId]
 	}
 
 	if size > 0 {
