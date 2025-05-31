@@ -1,4 +1,4 @@
-package client
+package message
 
 import (
 	"bufio"
@@ -98,7 +98,7 @@ func ReadMessage(conn net.Conn) (*Message, error) {
 }
 
 // encodeMessage encodes the message into a byte slice.
-func (m *Message) encodeMessage() []byte {
+func (m *Message) EncodeMessage() []byte {
 	buf := make([]byte, 4+m.LengthPrefix)
 
 	binary.BigEndian.PutUint32(buf, uint32(m.LengthPrefix))

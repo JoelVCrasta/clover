@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/JoelVCrasta/handshake"
+	"github.com/JoelVCrasta/message"
 	"github.com/JoelVCrasta/parsing"
 	"github.com/JoelVCrasta/tracker"
 )
@@ -95,12 +96,12 @@ func NewClient(torrent parsing.Torrent, peers []tracker.Peer, peerId [20]byte) (
 
 // GetBitfieldFromPeer reads the bitfield message right after the handshake done with the peer.
 func GetBitfieldFromPeer(conn net.Conn) (Bitfield, error) {
-	msg, err := ReadMessage(conn)
+	msg, err := message.ReadMessage(conn)
 	if err != nil {
 		return nil, err
 	}
 
-	if msg.MessageId != BitfieldId {
+	if msg.MessageId != message.BitfieldId {
 		return nil, fmt.Errorf("expected Bitfield message, got %v", msg.MessageId)
 	}
 
@@ -113,29 +114,29 @@ func GetBitfieldFromPeer(conn net.Conn) (Bitfield, error) {
 // ------------ Messages ------------
 
 func (ap *ActivePeer) SendChoke() error {
-	message := NewMessage(ChokeId, nil)
-	_, err := ap.Conn.Write(message.encodeMessage())
+	choke := message.NewMessage(message.ChokeId, nil)
+	_, err := ap.Conn.Write(choke.EncodeMessage())
 
 	return err
 }
 
 func (ap *ActivePeer) SendUnchoke() error {
-	message := NewMessage(UnchokeId, nil)
-	_, err := ap.Conn.Write(message.encodeMessage())
+	unchoke := message.NewMessage(message.UnchokeId, nil)
+	_, err := ap.Conn.Write(unchoke.EncodeMessage())
 
 	return err
 }
 
 func (ap *ActivePeer) SendInterested() error {
-	message := NewMessage(InterestedId, nil)
-	_, err := ap.Conn.Write(message.encodeMessage())
+	interested := message.NewMessage(message.InterestedId, nil)
+	_, err := ap.Conn.Write(interested.EncodeMessage())
 
 	return err
 }
 
 func (ap *ActivePeer) SendNotInterested() error {
-	message := NewMessage(NotInterestedId, nil)
-	_, err := ap.Conn.Write(message.encodeMessage())
+	notInterested := message.NewMessage(message.NotInterestedId, nil)
+	_, err := ap.Conn.Write(notInterested.EncodeMessage())
 
 	return err
 }
@@ -144,8 +145,8 @@ func (ap *ActivePeer) SendHave(pieceIndex int) error {
 	payload := make([]byte, 4)
 	binary.BigEndian.PutUint32(payload, uint32(pieceIndex))
 
-	message := NewMessage(HaveId, payload)
-	_, err := ap.Conn.Write(message.encodeMessage())
+	have := message.NewMessage(message.HaveId, payload)
+	_, err := ap.Conn.Write(have.EncodeMessage())
 
 	return err
 }
@@ -156,8 +157,8 @@ func (ap *ActivePeer) SendRequest(pieceIndex, offset, length int) error {
 	binary.BigEndian.PutUint32(payload[4:8], uint32(offset))
 	binary.BigEndian.PutUint32(payload[8:12], uint32(length))
 
-	message := NewMessage(RequestId, payload)
-	_, err := ap.Conn.Write(message.encodeMessage())
+	request := message.NewMessage(message.RequestId, payload)
+	_, err := ap.Conn.Write(request.EncodeMessage())
 
 	return err
 }
@@ -168,8 +169,8 @@ func (ap *ActivePeer) SendCancel(pieceIndex, offset, length int) error {
 	binary.BigEndian.PutUint32(payload[4:8], uint32(offset))
 	binary.BigEndian.PutUint32(payload[8:12], uint32(length))
 
-	message := NewMessage(CancelId, payload)
-	_, err := ap.Conn.Write(message.encodeMessage())
+	cancel := message.NewMessage(message.CancelId, payload)
+	_, err := ap.Conn.Write(cancel.EncodeMessage())
 
 	return err
 }
