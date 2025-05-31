@@ -1,10 +1,8 @@
 package client
 
 import (
-	"bufio"
 	"encoding/binary"
 	"fmt"
-	"io"
 	"log"
 	"net"
 	"sync"
@@ -97,7 +95,7 @@ func NewClient(torrent parsing.Torrent, peers []tracker.Peer, peerId [20]byte) (
 
 // GetBitfieldFromPeer reads the bitfield message right after the handshake done with the peer.
 func GetBitfieldFromPeer(conn net.Conn) (Bitfield, error) {
-	msg, err := readMessage(conn)
+	msg, err := ReadMessage(conn)
 	if err != nil {
 		return nil, err
 	}
@@ -110,38 +108,6 @@ func GetBitfieldFromPeer(conn net.Conn) (Bitfield, error) {
 	copy(bitfield, msg.Payload)
 
 	return bitfield, nil
-}
-
-/*
-decodeMessage reads a message from the given connection.
-It checks the length of the message, if the length is 0, it returns a KeepAlive message.
-If the length is greater than 0, then it is decoded into a Message struct.
-*/
-func readMessage(conn net.Conn) (*Message, error) {
-	reader := bufio.NewReader(conn)
-	lengthBuf := make([]byte, 4)
-
-	if _, err := io.ReadFull(reader, lengthBuf); err != nil {
-		return nil, err
-	}
-
-	length := binary.BigEndian.Uint32(lengthBuf)
-	if length == 0 {
-		return nil, nil // KeepAlive message
-	}
-
-	msg := make([]byte, length)
-	if _, err := io.ReadFull(reader, msg); err != nil {
-		return nil, err
-	}
-
-	fullMessage := make([]byte, 4+length)
-	copy(fullMessage, lengthBuf)
-	copy(fullMessage[4:], msg)
-
-	var message Message
-	message.decodeMessage(fullMessage)
-	return &message, nil
 }
 
 // ------------ Messages ------------

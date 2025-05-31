@@ -1,6 +1,11 @@
 package client
 
-import "encoding/binary"
+import (
+	"bufio"
+	"encoding/binary"
+	"io"
+	"net"
+)
 
 // <lengthPrefix : 4 bytes> <messageId : 1 byte> <payload : variable size>
 type MessageId int
@@ -58,6 +63,38 @@ func NewMessage(id MessageId, payload []byte) *Message {
 		MessageId:    id,
 		Payload:      payload,
 	}
+}
+
+/*
+decodeMessage reads a message from the given connection.
+It checks the length of the message, if the length is 0, it returns a KeepAlive message.
+If the length is greater than 0, then it is decoded into a Message struct.
+*/
+func ReadMessage(conn net.Conn) (*Message, error) {
+	reader := bufio.NewReader(conn)
+	lengthBuf := make([]byte, 4)
+
+	if _, err := io.ReadFull(reader, lengthBuf); err != nil {
+		return nil, err
+	}
+
+	length := binary.BigEndian.Uint32(lengthBuf)
+	if length == 0 {
+		return nil, nil // KeepAlive message
+	}
+
+	msg := make([]byte, length)
+	if _, err := io.ReadFull(reader, msg); err != nil {
+		return nil, err
+	}
+
+	fullMessage := make([]byte, 4+length)
+	copy(fullMessage, lengthBuf)
+	copy(fullMessage[4:], msg)
+
+	var m Message
+	m.decodeMessage(fullMessage)
+	return &m, nil
 }
 
 // encodeMessage encodes the message into a byte slice.
