@@ -3,6 +3,7 @@ package message
 import (
 	"bufio"
 	"encoding/binary"
+	"fmt"
 	"io"
 	"net"
 )
@@ -133,4 +134,47 @@ func (m *Message) decodeMessage(buf []byte) {
 	} else {
 		m.Payload = nil
 	}
+}
+
+// decodeHave decodes a Have message from the peer and updates the peer's bitfield.
+func (m *Message) DecodeHave() (int, error) {
+	if len(m.Payload) != payloadSize[m.MessageId] {
+		return 0, fmt.Errorf("invalid Have payload length: %d", len(m.Payload))
+	}
+
+	pieceIndex := binary.BigEndian.Uint32(m.Payload[:])
+
+	return int(pieceIndex), nil
+}
+
+// decodeBitfield decodes a Bitfield message from the peer and returns the bitfield as a byte slice.
+func (m *Message) DecodeBitfield() ([]byte, error) {
+	if len(m.Payload) < 1 {
+		return nil, fmt.Errorf("invalid Bitfield payload length: %d", len(m.Payload))
+	}
+
+	bitfield := make([]byte, len(m.Payload))
+	copy(bitfield, m.Payload)
+
+	return bitfield, nil
+}
+
+// DecodePiece decodes a Piece message from the peer and writes the block to the provided buffer.
+func (m *Message) DecodePiece(expectedIndex int, bufLength int) (uint32, []byte, error) {
+	if len(m.Payload) < 8 {
+		return 0, nil, fmt.Errorf("invalid Piece payload length: %d", len(m.Payload))
+	}
+
+	index := binary.BigEndian.Uint32(m.Payload[:4])
+	offset := binary.BigEndian.Uint32(m.Payload[4:8])
+	block := m.Payload[8:]
+
+	if int(index) != expectedIndex {
+		return 0, nil, fmt.Errorf("piece index mismatch: expected %d, got %d", expectedIndex, index)
+	}
+	if int(offset)+len(block) > bufLength {
+		return 0, nil, fmt.Errorf("block exceeds buffer size: offset %d, block size %d, buffer size %d", offset, len(block), bufLength)
+	}
+
+	return index, block, nil
 }
