@@ -69,12 +69,25 @@ func (dm *DownloadManager) Download() {
 	}
 
 	completedPieces := make(chan *completedPiece)
+	var wg sync.WaitGroup
 
 	// Start downloading pieces from peers
 	for _, peer := range dm.Client.ActivePeers {
-		go dm.peerDownload(peer, completedPieces)
+		wg.Add(1)
+		go func(p *client.ActivePeer) {
+			defer wg.Done()
+			dm.peerDownload(p, completedPieces)
+		}(peer)
 	}
 
+	go func() {
+		wg.Wait()
+		close(completedPieces)
+	}()
+
+	for piece := range completedPieces {
+		log.Printf("Completed piece %d (len=%d)", piece.index, len(piece.buf))
+	}
 }
 
 func (dm *DownloadManager) peerDownload(peer *client.ActivePeer, completedPieces chan *completedPiece) {
@@ -140,27 +153,20 @@ It sends requests to the peer until the entire piece is downloaded.
 If the peer is choked, it will wait until the peer unchokes before continuing.
 */
 func (wp *workPiece) downloadPiece(mu *sync.Mutex) error {
-	_ = wp.peer.Conn.SetDeadline(time.Now().Add(config.Config.PieceMessageTimeout))
-	defer wp.peer.Conn.SetDeadline(time.Time{})
-
 	for wp.downloadedBytes < wp.length {
-		// Sleep if the peer is choked
-		if wp.peer.Choked {
-			time.Sleep(100 * time.Millisecond)
-			continue
-		}
+		if !wp.peer.Choked {
+			// Calculate the size of the next request
+			remainingBytes := wp.length - wp.downloadedBytes
+			requestSize := min(remainingBytes, MAX_BLOCK_SIZE)
 
-		// Calculate the size of the next request
-		remainingBytes := wp.length - wp.downloadedBytes
-		requestSize := min(remainingBytes, MAX_BLOCK_SIZE)
-
-		err := wp.peer.SendRequest(wp.index, wp.downloadedBytes, requestSize)
-		if err != nil {
-			return err
+			err := wp.peer.SendRequest(wp.index, wp.downloadedBytes, requestSize)
+			if err != nil {
+				return err
+			}
 		}
 
 		// Read the piece data from the peer
-		err = wp.read(mu)
+		err := wp.read(mu)
 		if err != nil {
 			return err
 		}
@@ -197,15 +203,20 @@ It processes different message types such as Choke, Unchoke, Have, Bitfield, Pie
 It updates the peer's state based on the received messages.
 */
 func (wp *workPiece) read(mu *sync.Mutex) error {
+	_ = wp.peer.Conn.SetDeadline(time.Now().Add(config.Config.PieceMessageTimeout)) // Set a deadline for reading messages
+
 	msg, err := message.ReadMessage(wp.peer.Conn)
 	if err != nil {
 		// Peer connection closed
 		if err == io.EOF {
+			wp.peer.Conn.Close()
 			return fmt.Errorf("connection closed by peer %s:%d", wp.peer.IpAddr, wp.peer.Port)
 		}
 
 		return err
 	}
+
+	_ = wp.peer.Conn.SetDeadline(time.Time{}) // Clear the deadline after reading a message
 
 	// KeepAlive message
 	if msg == nil {
@@ -217,9 +228,11 @@ func (wp *workPiece) read(mu *sync.Mutex) error {
 
 	switch msg.MessageId {
 	case message.ChokeId:
+		log.Printf("Peer %s:%d choked us", wp.peer.IpAddr, wp.peer.Port)
 		wp.peer.Choked = true
 
 	case message.UnchokeId:
+		log.Printf("Peer %s:%d unchoked us", wp.peer.IpAddr, wp.peer.Port)
 		wp.peer.Choked = false
 
 	case message.HaveId:
@@ -241,6 +254,8 @@ func (wp *workPiece) read(mu *sync.Mutex) error {
 		if err != nil {
 			return err
 		}
+
+		log.Printf("Received block %d", offset)
 		copy(wp.buf[offset:], block)
 		wp.downloadedBytes += len(block)
 
