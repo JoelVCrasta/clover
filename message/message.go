@@ -60,7 +60,7 @@ type Message struct {
 // NewMessage creates a new message with the given id and payload.
 func NewMessage(id MessageId, payload []byte) *Message {
 	return &Message{
-		LengthPrefix: lengthPrefix[id] + len(payload),
+		LengthPrefix: 1 + len(payload),
 		MessageId:    id,
 		Payload:      payload,
 	}
@@ -160,21 +160,21 @@ func (m *Message) DecodeBitfield() ([]byte, error) {
 }
 
 // DecodePiece decodes a Piece message from the peer and writes the block to the provided buffer.
-func (m *Message) DecodePiece(expectedIndex int, bufLength int) (uint32, []byte, error) {
+func (m *Message) DecodePiece(expectedIndex, bufLength int) (int, []byte, error) {
 	if len(m.Payload) < 8 {
 		return 0, nil, fmt.Errorf("invalid Piece payload length: %d", len(m.Payload))
 	}
 
-	index := binary.BigEndian.Uint32(m.Payload[:4])
-	offset := binary.BigEndian.Uint32(m.Payload[4:8])
+	index := int(binary.BigEndian.Uint32(m.Payload[:4]))
+	offset := int(binary.BigEndian.Uint32(m.Payload[4:8]))
 	block := m.Payload[8:]
 
-	if int(index) != expectedIndex {
+	if index != expectedIndex {
 		return 0, nil, fmt.Errorf("piece index mismatch: expected %d, got %d", expectedIndex, index)
 	}
-	if int(offset)+len(block) > bufLength {
+	if offset+len(block) > bufLength {
 		return 0, nil, fmt.Errorf("block exceeds buffer size: offset %d, block size %d, buffer size %d", offset, len(block), bufLength)
 	}
 
-	return index, block, nil
+	return offset, block, nil
 }
