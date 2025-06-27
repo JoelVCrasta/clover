@@ -94,6 +94,15 @@ func NewClient(torrent parsing.Torrent, peers []tracker.Peer, peerId [20]byte) (
 	return c, nil
 }
 
+// Disconnect closes the connection to the peer and sets the Conn field to nil.
+func (p *ActivePeer) Disconnect() {
+	if p.Conn != nil {
+		log.Printf("Disconnecting from peer %s:%d", p.IpAddr, p.Port)
+		_ = p.Conn.Close()
+		p.Conn = nil
+	}
+}
+
 // GetBitfieldFromPeer reads the bitfield message right after the handshake done with the peer.
 func GetBitfieldFromPeer(conn net.Conn) (Bitfield, error) {
 	msg, err := message.ReadMessage(conn)
