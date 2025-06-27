@@ -6,10 +6,22 @@ import (
 	"log"
 	"math/rand"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/JoelVCrasta/config"
 )
+
+type TrackerManager struct {
+	Trackers []*Tracker
+}
+
+type Tracker struct {
+	Url          string
+	Connection   *Connection
+	Interval     time.Duration
+	LastAnnounce time.Time
+}
 
 type Connection struct {
 	conn          *net.UDPConn
@@ -18,20 +30,19 @@ type Connection struct {
 }
 
 type AnnounceRequest struct {
-	Key        uint32
-	Action     uint32
-	InfoHash   [20]byte
-	PeerId     [20]byte
-	IpAddr     uint32
-	Port       uint16
-	Uploaded   uint64
-	Downloaded uint64
-	Left       uint64
-	Event      uint32
-	Numwant    uint32
-
 	ConnectionId  uint64
+	Action        uint32
 	TransactionId uint32
+	InfoHash      [20]byte
+	PeerId        [20]byte
+	Downloaded    uint64
+	Left          uint64
+	Uploaded      uint64
+	Event         uint32
+	IpAddr        uint32
+	Key           uint32
+	Numwant       uint32
+	Port          uint16
 }
 
 type AnnounceResponse struct {
@@ -48,12 +59,106 @@ type Peer struct {
 	Port   uint16
 }
 
+func NewTrackerManager() *TrackerManager {
+	return &TrackerManager{
+		Trackers: make([]*Tracker, 0),
+	}
+}
+
 /*
-NewUDPTrackerConnection establishes a UDP connection to the tracker.
+ConnectTrackerAll connects to all trackers provided in the trackerUrls (AnnounceList).
+It initializes a Tracker object for each URL and appends it to the Trackers slice.
+If no trackers are connected, it returns an error.
+*/
+func (tm *TrackerManager) ConnectTrackerAll(trackerUrls []string) error {
+	for _, url := range trackerUrls {
+		conn, err := ConnectTracker(url)
+		if err != nil {
+			log.Printf("[tracker] Failed to connect to tracker %s: %v", url, err)
+			continue
+		}
+
+		tm.Trackers = append(tm.Trackers, &Tracker{
+			Url:          url,
+			Connection:   conn,
+			Interval:     config.Config.DefaultTrackerInterval,
+			LastAnnounce: time.Now(),
+		})
+		log.Printf("[tracker] Connected to tracker: %s", url)
+	}
+
+	if len(tm.Trackers) == 0 {
+		return fmt.Errorf("no trackers connected")
+	}
+
+	return nil
+}
+
+/*
+AnnounceTrackerAll announces to all trackers managed by the TrackerManager.
+It sends an AnnounceRequest to each tracker and collects the peers returned by each tracker.
+It returns a slice of Peer objects containing the peers from all trackers.
+*/
+func (tm *TrackerManager) AnnounceTrackerAll(arq AnnounceRequest, peerId [20]byte) []Peer {
+	var (
+		wg       sync.WaitGroup
+		mu       sync.Mutex
+		allPeers []Peer
+	)
+
+	for _, tracker := range tm.Trackers {
+		if time.Since(tracker.LastAnnounce) < tracker.Interval {
+			continue
+		}
+
+		wg.Add(1)
+		go func(t *Tracker) {
+			defer wg.Done()
+
+			conn := t.Connection
+			if conn == nil {
+				log.Printf("[tracker] No connection for tracker: %s", t.Url)
+				return
+			}
+
+			response, err := conn.AnnounceTracker(arq, peerId)
+			if err != nil {
+				log.Printf("[tracker] Failed to announce to tracker %s: %v", t.Url, err)
+				return
+			}
+
+			mu.Lock()
+			t.LastAnnounce = time.Now()
+			t.Interval = time.Duration(response.Interval) * time.Second
+			allPeers = append(allPeers, response.Peers...)
+			mu.Unlock()
+
+			log.Printf("[tracker] Announced to tracker %s successfully", t.Url)
+		}(tracker)
+	}
+
+	wg.Wait()
+	return allPeers
+}
+
+// Close closes all tracker connections managed by the TrackerManager.
+func (tm *TrackerManager) Close() {
+	for _, tracker := range tm.Trackers {
+		if tracker.Connection != nil {
+			tracker.Connection.Close()
+			log.Printf("Closed connection to tracker: %s", tracker.Url)
+		}
+	}
+	tm.Trackers = nil
+	log.Println("All tracker connections closed")
+}
+
+/*
+UDPTrackerConnection establishes a UDP connection to the tracker.
 It sends a connection packet which includes a BitTorrent UDP magic constant, action, and transaction ID.
 It returns a Connection object containing the trackers connection ID and transaction ID.
 */
-func NewUDPTrackerConnection(trackerUrl string) (*Connection, error) {
+func ConnectTracker(trackerUrl string) (*Connection, error) {
 	udpAddress, err := net.ResolveUDPAddr("udp", trackerUrl)
 	if err != nil {
 		return nil, err
@@ -103,8 +208,8 @@ func NewUDPTrackerConnection(trackerUrl string) (*Connection, error) {
 func (c *Connection) Close() {
 	if c.conn != nil {
 		c.conn.Close()
+		c.conn = nil
 	}
-	log.Println("Connection closed")
 }
 
 /*
@@ -112,7 +217,7 @@ TrackerAnnounce sends an announce request to the tracker.
 It includes the action, transaction ID, info hash, peer ID, and other parameters.
 It returns an AnnounceResponse object containing the response from the tracker.
 */
-func (c Connection) TrackerAnnounce(arq AnnounceRequest, peerId [20]byte) (*AnnounceResponse, error) {
+func (c Connection) AnnounceTracker(arq AnnounceRequest, peerId [20]byte) (*AnnounceResponse, error) {
 
 	arq.Action = 1
 	arq.ConnectionId = c.connectionId
@@ -155,58 +260,6 @@ func (c Connection) TrackerAnnounce(arq AnnounceRequest, peerId [20]byte) (*Anno
 	return &a, nil
 }
 
-type ScrapeRequest struct {
-	ConnectionId  uint64
-	Action        uint32
-	TransactionId uint32
-	InfoHash      [20]byte
-}
-
-type ScrapeResponse struct {
-	action        uint32
-	transactionId uint32
-	seeders       uint32
-	leechers      uint32
-	completed     uint32
-}
-
-/*
-Scrape sends a scrape request to the tracker.
-It includes the connectionID, action, transaction ID, and info hash.
-It returns a ScrapeResponse object containing the response from the tracker.
-*/
-func (c Connection) Scrape() (*ScrapeResponse, error) {
-	sr := ScrapeRequest{
-		ConnectionId:  c.connectionId,
-		Action:        2,
-		TransactionId: c.transactionId,
-	}
-
-	packet := make([]byte, 32)
-	binary.BigEndian.PutUint64(packet, sr.ConnectionId)       // 8 bytes
-	binary.BigEndian.PutUint32(packet[8:], sr.Action)         // 4 bytes
-	binary.BigEndian.PutUint32(packet[12:], sr.TransactionId) // 4 bytes
-	copy(packet[16:], sr.InfoHash[:])                         // 20 bytes
-
-	n, err := c.conn.Write(packet[:])
-	if err != nil {
-		return nil, err
-	}
-	c.conn.SetDeadline(time.Now().Add(config.Config.TrackerConnectTimeout))
-
-	buf := make([]byte, 1024)
-	_, err = c.conn.Read(buf)
-	if err != nil {
-		return nil, err
-	}
-
-	log.Printf("Recieved %v from scrape request\n ", n)
-
-	var s ScrapeResponse
-	s.decodeScrapeResponse(buf)
-	return &s, nil
-}
-
 // decodeAnnounceResponse decodes the response from the announce request.and returns an AnnounceResponse object.
 func (a *AnnounceResponse) decodeAnnounceResponse(buf []byte, n int) {
 	peersCount := (n - 20) / 6
@@ -225,15 +278,6 @@ func (a *AnnounceResponse) decodeAnnounceResponse(buf []byte, n int) {
 		a.Peers[i].IpAddr = net.IP(buf[20+offset : 20+offset+4])
 		a.Peers[i].Port = binary.BigEndian.Uint16(buf[24+offset:])
 	}
-}
-
-// decodeScrapeResponse decodes the response from the scrape request and returns a ScrapeResponse object.
-func (s *ScrapeResponse) decodeScrapeResponse(buf []byte) {
-	s.action = binary.BigEndian.Uint32(buf)
-	s.transactionId = binary.BigEndian.Uint32(buf[4:])
-	s.seeders = binary.BigEndian.Uint32(buf[8:])
-	s.leechers = binary.BigEndian.Uint32(buf[12:])
-	s.completed = binary.BigEndian.Uint32(buf[16:])
 }
 
 type ConnPacket [16]byte
