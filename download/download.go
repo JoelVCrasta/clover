@@ -92,6 +92,7 @@ func (dm *DownloadManager) Download() {
 
 func (dm *DownloadManager) peerDownload(peer *client.ActivePeer, completedPieces chan *completedPiece) {
 	log.Printf("Starting download from peer %s:%d", peer.IpAddr, peer.Port)
+	defer peer.Disconnect() // Ensure the peer is disconnected when done
 
 	_ = peer.SendInterested()
 
@@ -102,14 +103,16 @@ func (dm *DownloadManager) peerDownload(peer *client.ActivePeer, completedPieces
 			continue
 		}
 
-		if dm.Downloaded[work] {
-			continue // Skip already downloaded pieces
+		if peer.Conn == nil {
+			log.Printf("Peer %s:%d connection lost", peer.IpAddr, peer.Port)
+			dm.PieceQueue <- work // Requeue the piece if peer connection is lost
+			continue
 		}
 
 		dm.Mutex.Lock()
-		if dm.Requested[work] {
+		if dm.Downloaded[work] || dm.Requested[work] {
 			dm.Mutex.Unlock()
-			continue // Skip already requested pieces
+			continue // Skip already downloaded or requested pieces
 		}
 		dm.Requested[work] = true
 		dm.Mutex.Unlock()
@@ -138,6 +141,8 @@ func (dm *DownloadManager) peerDownload(peer *client.ActivePeer, completedPieces
 		dm.Downloaded[work] = true // Mark the piece as downloaded
 		dm.Requested[work] = false // Mark the piece as no longer requested
 		dm.Mutex.Unlock()
+
+		peer.SendHave(work) // Notifies the peer that we have downloaded the piece
 
 		// Send the completed piece to the channel
 		completedPieces <- &completedPiece{
@@ -203,13 +208,13 @@ It processes different message types such as Choke, Unchoke, Have, Bitfield, Pie
 It updates the peer's state based on the received messages.
 */
 func (wp *workPiece) read(mu *sync.Mutex) error {
-	_ = wp.peer.Conn.SetDeadline(time.Now().Add(config.Config.PieceMessageTimeout)) // Set a deadline for reading messages
+	_ = wp.peer.Conn.SetReadDeadline(time.Now().Add(config.Config.PieceMessageTimeout)) // Set a deadline for reading messages
 
 	msg, err := message.ReadMessage(wp.peer.Conn)
 	if err != nil {
 		// Peer connection closed
 		if err == io.EOF {
-			wp.peer.Conn.Close()
+			wp.peer.Disconnect() // Disconnect the peer if EOF is sent
 			return fmt.Errorf("connection closed by peer %s:%d", wp.peer.IpAddr, wp.peer.Port)
 		}
 
