@@ -23,7 +23,7 @@ func TestTracker(t *testing.T) {
 	// Connect to a tracker
 	var conn *tracker.Connection
 	for _, announce := range data.AnnounceList {
-		tempConn, err := tracker.NewUDPTrackerConnection(announce) // opentor.net:6969
+		tempConn, err := tracker.ConnectTracker(announce) // opentor.net:6969
 		if err != nil {
 			t.Errorf("Failed to create UDP tracker connection: %v", err)
 			continue
@@ -55,7 +55,7 @@ func TestTracker(t *testing.T) {
 		Numwant:    50,
 	}
 
-	res, err := conn.TrackerAnnounce(testRequest, peerId)
+	res, err := conn.AnnounceTracker(testRequest, peerId)
 	if err != nil {
 		t.Fatalf("Failed to send announce request: %v", err)
 	}
