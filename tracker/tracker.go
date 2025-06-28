@@ -1,6 +1,7 @@
 package tracker
 
 import (
+	"context"
 	"encoding/binary"
 	"fmt"
 	"log"
@@ -71,26 +72,63 @@ It initializes a Tracker object for each URL and appends it to the Trackers slic
 If no trackers are connected, it returns an error.
 */
 func (tm *TrackerManager) ConnectTrackerAll(trackerUrls []string) error {
+	var (
+		wg    sync.WaitGroup
+		mu    sync.Mutex
+		limit = config.Config.MaxTrackerConnections // limit the number of concurrent tracker connections
+		sem   = make(chan struct{}, 15)             // limits concurrent goroutines
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	for _, url := range trackerUrls {
-		conn, err := ConnectTracker(url)
-		if err != nil {
-			log.Printf("[tracker] Failed to connect to tracker %s: %v", url, err)
-			continue
+		if ctx.Err() != nil {
+			break // exit to stop new spawning goroutines
 		}
 
-		tm.Trackers = append(tm.Trackers, &Tracker{
-			Url:          url,
-			Connection:   conn,
-			Interval:     config.Config.DefaultTrackerInterval,
-			LastAnnounce: time.Now(),
-		})
-		log.Printf("[tracker] Connected to tracker: %s", url)
+		sem <- struct{}{} // limit concurrent connections
+		wg.Add(1)
+
+		go func(url string) {
+			defer func() {
+				wg.Done()
+				<-sem
+			}()
+
+			if ctx.Err() != nil {
+				return // exit if context is cancelled
+			}
+
+			conn, err := ConnectTracker(url)
+			if err != nil {
+				log.Printf("[tracker] Failed to connect to tracker %s: %v", url, err)
+				return
+			}
+
+			mu.Lock()
+			if len(tm.Trackers) < limit {
+				tm.Trackers = append(tm.Trackers, &Tracker{
+					Url:          url,
+					Connection:   conn,
+					Interval:     config.Config.DefaultTrackerInterval,
+					LastAnnounce: time.Time{},
+				})
+				log.Printf("[tracker] Connected to tracker: %s", url)
+
+				if len(tm.Trackers) == limit {
+					cancel()
+				}
+			}
+			mu.Unlock()
+		}(url)
 	}
+
+	wg.Wait()
 
 	if len(tm.Trackers) == 0 {
 		return fmt.Errorf("no trackers connected")
 	}
-
 	return nil
 }
 
@@ -103,6 +141,7 @@ func (tm *TrackerManager) AnnounceTrackerAll(arq AnnounceRequest, peerId [20]byt
 	var (
 		wg       sync.WaitGroup
 		mu       sync.Mutex
+		peerSet  = make(map[string]bool) //
 		allPeers []Peer
 	)
 
@@ -130,7 +169,15 @@ func (tm *TrackerManager) AnnounceTrackerAll(arq AnnounceRequest, peerId [20]byt
 			mu.Lock()
 			t.LastAnnounce = time.Now()
 			t.Interval = time.Duration(response.Interval) * time.Second
-			allPeers = append(allPeers, response.Peers...)
+
+			for _, peer := range response.Peers {
+				key := fmt.Sprintf("%s:%d", peer.IpAddr.String(), peer.Port)
+				if !peerSet[key] {
+					peerSet[key] = true
+					allPeers = append(allPeers, peer)
+				}
+
+			}
 			mu.Unlock()
 
 			log.Printf("[tracker] Announced to tracker %s successfully", t.Url)
@@ -150,7 +197,6 @@ func (tm *TrackerManager) Close() {
 		}
 	}
 	tm.Trackers = nil
-	log.Println("All tracker connections closed")
 }
 
 /*
@@ -174,7 +220,6 @@ func ConnectTracker(trackerUrl string) (*Connection, error) {
 	}
 
 	connectionPacket := getConnectionPacket()
-	log.Println("Connection packet:", []byte(connectionPacket[:]))
 
 	_, err = conn.Write(connectionPacket[:])
 	if err != nil {
@@ -183,7 +228,7 @@ func ConnectTracker(trackerUrl string) (*Connection, error) {
 
 	conn.SetDeadline(time.Now().Add(config.Config.TrackerConnectTimeout))
 	buf := make([]byte, 32)
-	n, err := conn.Read(buf)
+	_, err = conn.Read(buf)
 
 	conn.SetDeadline(time.Time{})
 	if err != nil {
@@ -194,8 +239,12 @@ func ConnectTracker(trackerUrl string) (*Connection, error) {
 	transactionId := binary.BigEndian.Uint32(buf[4:])
 	connectionId := binary.BigEndian.Uint64(buf[8:])
 
-	log.Printf("Recieved %v bytes from tracker connection request\n", n)
-	log.Printf("Response from server, Action: %d, transactionId: %d, connectionId: %d\n", action, transactionId, connectionId)
+	if action == 3 {
+		return nil, fmt.Errorf("tracker returned error")
+	}
+
+	// log.Printf("Recieved %v bytes from tracker connection request\n", n)
+	// log.Printf("Response from server, Action: %d, transactionId: %d, connectionId: %d\n", action, transactionId, connectionId)
 
 	return &Connection{
 		conn:          conn,
@@ -239,7 +288,7 @@ func (c Connection) AnnounceTracker(arq AnnounceRequest, peerId [20]byte) (*Anno
 	binary.BigEndian.PutUint32(packet[92:], arq.Numwant)       // 4 bytes
 	binary.BigEndian.PutUint16(packet[96:], arq.Port)          // 2 bytes
 
-	log.Println("Announce packet:", packet[:])
+	// log.Println("Announce packet:", packet[:])
 
 	n, err := c.conn.Write(packet[:])
 	if err != nil {
@@ -253,7 +302,7 @@ func (c Connection) AnnounceTracker(arq AnnounceRequest, peerId [20]byte) (*Anno
 		return nil, err
 	}
 
-	log.Printf("Recieved %v bytes from announce request\n ", n)
+	// log.Printf("Recieved %v bytes from announce request\n ", n)
 
 	var a AnnounceResponse
 	a.decodeAnnounceResponse(buf, n)
