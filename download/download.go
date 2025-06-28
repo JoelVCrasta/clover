@@ -104,9 +104,8 @@ func (dm *DownloadManager) peerDownload(peer *client.ActivePeer, completedPieces
 		}
 
 		if peer.Conn == nil {
-			log.Printf("Peer %s:%d connection lost", peer.IpAddr, peer.Port)
 			dm.PieceQueue <- work // Requeue the piece if peer connection is lost
-			continue
+			break                 // Exit the loop
 		}
 
 		dm.Mutex.Lock()
