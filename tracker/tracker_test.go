@@ -13,25 +13,18 @@ import (
 func TestTracker(t *testing.T) {
 	var data parsing.Torrent
 
-	err := data.Torrent("../assets/arch.torrent")
+	err := data.Torrent("../assets/rdr2.torrent")
 	if err != nil {
 		t.Fatalf("Failed to initialize torrent (%v)", err)
 	}
 
 	log.Println(data.AnnounceList)
 
-	// Connect to a tracker
-	var conn *tracker.Connection
-	for _, announce := range data.AnnounceList {
-		tempConn, err := tracker.ConnectTracker(announce) // opentor.net:6969
-		if err != nil {
-			t.Errorf("Failed to create UDP tracker connection: %v", err)
-			continue
-		}
-
-		conn = tempConn
-		t.Log("Connection established with tracker")
-		break
+	// Connect to a trackers
+	trackerManager := tracker.NewTrackerManager()
+	err = trackerManager.ConnectTrackerAll(data.AnnounceList)
+	if err != nil {
+		t.Fatalf("Failed to connect to trackers: %v", err)
 	}
 
 	// Generate a random transaction ID
@@ -55,14 +48,10 @@ func TestTracker(t *testing.T) {
 		Numwant:    50,
 	}
 
-	res, err := conn.AnnounceTracker(testRequest, peerId)
-	if err != nil {
-		t.Fatalf("Failed to send announce request: %v", err)
-	}
-
-	t.Logf("Action: %d, Transaction ID: %d, Interval: %d, Leechers: %d, Seeders: %d\n", res.Action, res.TransactionId, res.Interval, res.Leechers, res.Seeders)
-	t.Log("Peers:", res.Peers)
+	peers := trackerManager.AnnounceTrackerAll(testRequest, peerId)
+	t.Log("Peers:", peers)
 
 	// Close all the connections
-	conn.Close()
+	trackerManager.Close()
+
 }
