@@ -10,7 +10,7 @@ type GlobalConfig struct {
 	PieceMessageTimeout    time.Duration
 	DefaultTrackerInterval time.Duration
 	DownloadDirectory      string
-	MaxConnections         int
+	MaxTrackerConnections  int
 	PeerId                 [20]byte
 }
 
@@ -18,9 +18,9 @@ var Config = GlobalConfig{
 	MinPeers:               10,
 	Port:                   6881,
 	TrackerConnectTimeout:  5 * time.Second,
-	PeerHandshakeTimeout:   3 * time.Second,
+	PeerHandshakeTimeout:   10 * time.Second,
 	PieceMessageTimeout:    25 * time.Second,
 	DefaultTrackerInterval: 30 * time.Second,
 	DownloadDirectory:      "./Downloads",
-	MaxConnections:         50,
+	MaxTrackerConnections:  8,
 }
