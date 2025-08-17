@@ -9,8 +9,8 @@ import (
 func Run() {
 	var torrent parsing.Torrent
 
-	err := torrent.Init("assets/rdr2.torrent")
+	err := torrent.Torrent("assets/arch.torrent")
 	if err != nil {
-		log.Fatalf("Failed to initialize torrent: %v", err)
+		log.Fatalf("Failed to initialize torrent (%v)", err)
 	}
 }
