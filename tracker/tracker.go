@@ -76,7 +76,6 @@ func (tm *TrackerManager) ConnectTrackerAll(trackerUrls []string) error {
 		wg    sync.WaitGroup
 		mu    sync.Mutex
 		limit = config.Config.MaxTrackerConnections // limit the number of concurrent tracker connections
-		sem   = make(chan struct{}, 15)             // limits concurrent goroutines
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -87,14 +86,10 @@ func (tm *TrackerManager) ConnectTrackerAll(trackerUrls []string) error {
 			break // exit to stop new spawning goroutines
 		}
 
-		sem <- struct{}{} // limit concurrent connections
 		wg.Add(1)
 
 		go func(url string) {
-			defer func() {
-				wg.Done()
-				<-sem
-			}()
+			defer wg.Done()
 
 			if ctx.Err() != nil {
 				return // exit if context is cancelled
@@ -141,7 +136,7 @@ func (tm *TrackerManager) AnnounceTrackerAll(arq AnnounceRequest, peerId [20]byt
 	var (
 		wg       sync.WaitGroup
 		mu       sync.Mutex
-		peerSet  = make(map[string]bool) //
+		peerSet  = make(map[string]bool) // to avoid duplicate peers
 		allPeers []Peer
 	)
 
