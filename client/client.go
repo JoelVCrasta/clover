@@ -24,12 +24,13 @@ type Client struct {
 
 // PeerInfo represents information about a peer connected to clover.
 type ActivePeer struct {
-	IpAddr   net.IP
-	Port     uint16
-	Conn     net.Conn
-	PeerId   [20]byte
-	Choked   bool
-	Bitfield Bitfield
+	IpAddr      net.IP
+	Port        uint16
+	Conn        net.Conn
+	PeerId      [20]byte
+	Choked      bool
+	Bitfield    Bitfield
+	FailedCount int
 }
 
 /*
@@ -57,18 +58,18 @@ func NewClient(torrent parsing.Torrent, peers []tracker.Peer, peerId [20]byte) (
 
 			conn, res, err := handshake.NewHandshake(torrent.InfoHash, peerId, peer.IpAddr, peer.Port)
 			if err != nil {
-				log.Printf("Failed to connect to peer %s:%d - %v", peer.IpAddr, peer.Port, err)
+				log.Printf("[client] Failed to connect to peer %s:%d - %v", peer.IpAddr, peer.Port, err)
 				return
 			}
 
 			bitfield, err := GetBitfieldFromPeer(conn)
 			if err != nil {
-				log.Printf("Failed to read bitfield to peer %s:%d - %v", peer.IpAddr, peer.Port, err)
+				log.Printf("[client] Failed to read bitfield to peer %s:%d - %v", peer.IpAddr, peer.Port, err)
 				conn.Close()
 				return
 			}
 
-			log.Printf("Connected to peer %s:%d", peer.IpAddr, peer.Port)
+			log.Printf("[client] Connected to peer %s:%d", peer.IpAddr, peer.Port)
 
 			active := &ActivePeer{
 				IpAddr:   peer.IpAddr,
