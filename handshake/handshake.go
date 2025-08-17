@@ -1,7 +1,6 @@
 package handshake
 
 import (
-	"log"
 	"net"
 	"strconv"
 	"time"
@@ -24,10 +23,7 @@ It returns the connection, the handshake response, and any error encountered.
 */
 func NewHandshake(infoHash, peerId [20]byte, peerIp net.IP, peerPort uint16) (net.Conn, *Handshake, error) {
 	request := getHandshakePayload(infoHash, peerId)
-
 	peerAddress := net.JoinHostPort(peerIp.String(), strconv.Itoa(int(peerPort)))
-
-	log.Println("Peer address:", peerAddress)
 
 	conn, err := net.DialTimeout("tcp", peerAddress, config.Config.PeerHandshakeTimeout)
 	if err != nil {
