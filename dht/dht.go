@@ -3,51 +3,97 @@ package dht
 import (
 	"fmt"
 	"log"
+	"net"
 	"time"
 
 	"github.com/anacrolix/dht/v2"
 )
 
-func Start(infoHash [20]byte ) {
+type DHT struct {
+	server   *dht.Server
+	infoHash [20]byte
+	quit     chan struct{}
+}
+
+type Peer struct {
+	IP   net.IP
+	Port uint16
+}
+
+func NewDHT(infoHash [20]byte) (*DHT, error) {
 	config := dht.NewDefaultServerConfig()
+
 	server, err := dht.NewServer(config)
 	if err != nil {
-		log.Fatalf("[dht] Failed to create DHT server: %v", err)
+		return nil, fmt.Errorf("[dht] failed to create DHT server: %w", err)
 	}
-	defer server.Close()
 
- 
-	// This starts the bootstrapping process, which connects to known DHT nodes.
-	if stats, err := server.Bootstrap(); err != nil {
-		log.Fatalf("[dht] Failed to bootstrap DHT: %v", err)
+	return &DHT{
+		server:   server,
+		infoHash: infoHash,
+		quit:     make(chan struct{}),
+	}, nil
+}
+
+/*
+Start starts the DHT bootstrapping process and begins announcing the info hash.
+It returns a channel that will receive discovered peers.
+It will periodically announce the info hash every 5 minutes.
+*/
+func (d *DHT) Start() (<-chan Peer, error) {
+	if stats, err := d.server.Bootstrap(); err != nil {
+		d.server.Close()
+		return nil, fmt.Errorf("[dht] bootstrap failed: %w", err)
 	} else {
-		log.Printf("[dht] DHT bootstrap stats: %v", stats)
+		log.Printf("[dht] bootstrap stats: %v", stats)
 	}
 
-	
+	peerChan := make(chan Peer)
+
 	go func() {
+		defer close(peerChan)
+
+		// announce immediately first
+		d.announceOnce(peerChan)
+
 		ticker := time.NewTicker(5 * time.Minute)
 		defer ticker.Stop()
 
 		for {
 			select {
-				case <- ticker.C:
-					announce, err := server.AnnounceTraversal(infoHash)
-					if err != nil {
-						log.Printf("[dht] Failed to announce: %v", err)
-						continue
-					}
-
-					for peerValues := range announce.Peers {
-						for _, peer := range peerValues.Peers {
-							fmt.Printf("Peer: %s:%d\n", peer.IP, peer.Port)
-							
-						}
-					}
-					announce.Close()
+			case <-d.quit:
+				return
+			case <-ticker.C:
+				d.announceOnce(peerChan)
 			}
 		}
 	}()
+
+	return peerChan, nil
 }
 
+// announceOnce performs a single announce to the DHT and sends discovered peers to the channel.
+func (d *DHT) announceOnce(peerChan chan<- Peer) {
+	announce, err := d.server.AnnounceTraversal(d.infoHash)
+	if err != nil {
+		log.Printf("[dht] announce failed: %v", err)
+		return
+	}
+	defer announce.Close()
 
+	for peerValues := range announce.Peers {
+		for _, p := range peerValues.Peers {
+			select {
+			case peerChan <- Peer{IP: p.IP, Port: uint16(p.Port)}:
+			case <-d.quit: // exit quickly if stopped
+				return
+			}
+		}
+	}
+}
+
+func (d *DHT) Stop() {
+	close(d.quit)
+	d.server.Close()
+	log.Println("[dht] stopped")
+}
