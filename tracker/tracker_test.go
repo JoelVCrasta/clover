@@ -2,8 +2,8 @@ package tracker_test
 
 import (
 	"log"
-	"math/rand/v2"
 	"testing"
+	"time"
 
 	"github.com/JoelVCrasta/parsing"
 	"github.com/JoelVCrasta/peer"
@@ -13,19 +13,11 @@ import (
 func TestTracker(t *testing.T) {
 	var data parsing.Torrent
 
-	err := data.Torrent("../assets/rdr2.torrent")
+	err := data.Torrent("../assets/superman.torrent")
 	if err != nil {
 		t.Fatalf("Failed to initialize torrent (%v)", err)
 	}
-
 	log.Println(data.AnnounceList)
-
-	// Connect to a trackers
-	trackerManager := tracker.NewTrackerManager()
-	err = trackerManager.ConnectTrackerAll(data.AnnounceList)
-	if err != nil {
-		t.Fatalf("Failed to connect to trackers: %v", err)
-	}
 
 	// Generate a random transaction ID
 	peerId, err := peer.GeneratePeerID()
@@ -35,23 +27,32 @@ func TestTracker(t *testing.T) {
 	}
 	t.Log("Peer ID:", string(peerId[:]))
 
-	// Create a new announce request
-	testRequest := tracker.AnnounceRequest{
-		Key:        rand.Uint32(),
-		InfoHash:   data.InfoHash,
-		IpAddr:     0,
-		Port:       6881,
-		Uploaded:   0,
-		Downloaded: 0,
-		Left:       1000,
-		Event:      0,
-		Numwant:    50,
+	// Connect to a trackers
+	trackerManager := tracker.NewTrackerManager(
+		data.AnnounceList,
+		data.InfoHash,
+		peerId,
+	)
+
+	trackerPeerChan, err := trackerManager.Start()
+	if err != nil {
+		t.Fatalf("Error: %v", err)
 	}
 
-	peers := trackerManager.AnnounceTrackerAll(testRequest, peerId)
-	t.Log("Peers:", peers)
+	timeout := time.After(100 * time.Second)
+	for {
+		select {
+		case peer, ok := <-trackerPeerChan:
+			if !ok {
+				t.Log("[tracker] peer channel closed")
+				return
+			}
+			t.Logf("Got peer from tracker: %s:%d", peer.IpAddr, peer.Port)
 
-	// Close all the connections
-	trackerManager.Close()
-
+		case <-timeout:
+			t.Log("Timeout reached, stopping tracker manager")
+			trackerManager.Stop()
+			return
+		}
+	}
 }
