@@ -7,22 +7,27 @@ import (
 	"log"
 	"math/rand"
 	"net"
-	"sync"
 	"time"
 
 	"github.com/JoelVCrasta/config"
 )
 
 type TrackerManager struct {
-	Trackers []*Tracker
+	// Trackers    []*Tracker
+	trackerUrls []string
+	infoHash    [20]byte
+	peerId      [20]byte
+	ctx         context.Context
+	cancel      context.CancelFunc
 }
 
-type Tracker struct {
-	Url          string
-	Connection   *Connection
-	Interval     time.Duration
-	LastAnnounce time.Time
-}
+// Maybe needed for stats and reconnects in future
+// type Tracker struct {
+// 	Url          string
+// 	Connection   *Connection
+// 	Interval     time.Duration
+// 	LastAnnounce time.Time
+// }
 
 type Connection struct {
 	conn          *net.UDPConn
@@ -60,142 +65,114 @@ type Peer struct {
 	Port   uint16
 }
 
-func NewTrackerManager() *TrackerManager {
+func NewTrackerManager(trackerUrls []string, infoHash, peerId [20]byte) *TrackerManager {
+	ctx, cancel := context.WithCancel(context.Background())
+
 	return &TrackerManager{
-		Trackers: make([]*Tracker, 0),
+		// Trackers:    make([]*Tracker, 0),
+		trackerUrls: trackerUrls,
+		infoHash:    infoHash,
+		peerId:      peerId,
+		ctx:         ctx,
+		cancel:      cancel,
 	}
 }
 
 /*
-ConnectTrackerAll connects to all trackers provided in the trackerUrls (AnnounceList).
-It initializes a Tracker object for each URL and appends it to the Trackers slice.
-If no trackers are connected, it returns an error.
+Start connects to all trackers and starts announcing.
+It will periodically re-announce to the trackers.
+It returns a channel of Peer objects that can be used to connect to peers.
 */
-func (tm *TrackerManager) ConnectTrackerAll(trackerUrls []string) error {
-	var (
-		wg    sync.WaitGroup
-		mu    sync.Mutex
-		limit = config.Config.MaxTrackerConnections // limit the number of concurrent tracker connections
-	)
+func (tm *TrackerManager) Start() (<-chan Peer, error) {
+	peerChan := make(chan Peer)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	for _, url := range tm.trackerUrls {
+		go func(trackerUrl string) {
+			conn, err := ConnectTracker(trackerUrl)
+			if err != nil {
+				log.Printf("[tracker] failed to connect to tracker %s: %v", trackerUrl, err)
+				return
+			}
+			defer conn.Close()
 
-	for _, url := range trackerUrls {
-		if ctx.Err() != nil {
-			break // exit to stop new spawning goroutines
-		}
-
-		wg.Add(1)
-
-		go func(url string) {
-			defer wg.Done()
-
-			if ctx.Err() != nil {
-				return // exit if context is cancelled
+			// Create an announce request
+			arq := AnnounceRequest{
+				Key:        rand.Uint32(),
+				InfoHash:   tm.infoHash,
+				IpAddr:     0,
+				Port:       6881,
+				Uploaded:   0,
+				Downloaded: 0,
+				Left:       500,
+				Event:      0,
+				Numwant:    50,
 			}
 
-			conn, err := ConnectTracker(url)
+			response, err := conn.AnnounceTracker(arq, tm.peerId)
 			if err != nil {
-				log.Printf("[tracker] Failed to connect to tracker %s: %v", url, err)
+				log.Printf("[tracker] announce failed for %s: %v", trackerUrl, err)
 				return
 			}
 
-			mu.Lock()
-			if len(tm.Trackers) < limit {
-				tm.Trackers = append(tm.Trackers, &Tracker{
-					Url:          url,
-					Connection:   conn,
-					Interval:     config.Config.DefaultTrackerInterval,
-					LastAnnounce: time.Time{},
-				})
-				log.Printf("[tracker] Connected to tracker: %s", url)
+			log.Printf("[tracker] got %d peers from %s", len(response.Peers), trackerUrl)
 
-				if len(tm.Trackers) == limit {
-					cancel()
+			for _, p := range response.Peers {
+				select {
+				case peerChan <- p:
+				case <-tm.ctx.Done():
+					return
+				}
+
+			}
+
+			// Periodically re-announce to the tracker
+			interval := response.Interval
+			if response.Interval <= 0 {
+				interval = config.Config.DefaultTrackerInterval
+			}
+
+			ticker := time.NewTicker(time.Duration(interval) * time.Second)
+			defer ticker.Stop()
+
+			for {
+				select {
+				case <-ticker.C:
+					response, err = conn.AnnounceTracker(arq, tm.peerId)
+					if err != nil {
+						log.Printf("[tracker] re-announce failed for %s: %v", trackerUrl, err)
+						return
+					}
+
+					for _, p := range response.Peers {
+						select {
+						case peerChan <- p:
+						case <-tm.ctx.Done():
+							return
+						}
+					}
+
+				case <-tm.ctx.Done():
+					return
 				}
 			}
-			mu.Unlock()
+
 		}(url)
 	}
 
-	wg.Wait()
+	return peerChan, nil
+}
 
-	if len(tm.Trackers) == 0 {
-		return fmt.Errorf("no trackers connected")
+// Stop stops the tracker manager and closes all connections.
+func (tm *TrackerManager) Stop() {
+	if tm.cancel != nil {
+		tm.cancel()
 	}
-	return nil
+
+	log.Println("[tracker] stopped trackers")
 }
 
 /*
-AnnounceTrackerAll announces to all trackers managed by the TrackerManager.
-It sends an AnnounceRequest to each tracker and collects the peers returned by each tracker.
-It returns a slice of Peer objects containing the peers from all trackers.
-*/
-func (tm *TrackerManager) AnnounceTrackerAll(arq AnnounceRequest, peerId [20]byte) []Peer {
-	var (
-		wg       sync.WaitGroup
-		mu       sync.Mutex
-		peerSet  = make(map[string]bool) // to avoid duplicate peers
-		allPeers []Peer
-	)
-
-	for _, tracker := range tm.Trackers {
-		if time.Since(tracker.LastAnnounce) < tracker.Interval {
-			continue
-		}
-
-		wg.Add(1)
-		go func(t *Tracker) {
-			defer wg.Done()
-
-			conn := t.Connection
-			if conn == nil {
-				log.Printf("[tracker] No connection for tracker: %s", t.Url)
-				return
-			}
-
-			response, err := conn.AnnounceTracker(arq, peerId)
-			if err != nil {
-				log.Printf("[tracker] Failed to announce to tracker %s: %v", t.Url, err)
-				return
-			}
-
-			mu.Lock()
-			t.LastAnnounce = time.Now()
-			t.Interval = time.Duration(response.Interval) * time.Second
-
-			for _, peer := range response.Peers {
-				key := fmt.Sprintf("%s:%d", peer.IpAddr.String(), peer.Port)
-				if !peerSet[key] {
-					peerSet[key] = true
-					allPeers = append(allPeers, peer)
-				}
-
-			}
-			mu.Unlock()
-
-			log.Printf("[tracker] Announced to tracker %s successfully", t.Url)
-		}(tracker)
-	}
-
-	wg.Wait()
-	return allPeers
-}
-
-// Close closes all tracker connections managed by the TrackerManager.
-func (tm *TrackerManager) Close() {
-	for _, tracker := range tm.Trackers {
-		if tracker.Connection != nil {
-			tracker.Connection.Close()
-			log.Printf("Closed connection to tracker: %s", tracker.Url)
-		}
-	}
-	tm.Trackers = nil
-}
-
-/*
-UDPTrackerConnection establishes a UDP connection to the tracker.
+ConnectTracker establishes a UDP connection to the tracker.
 It sends a connection packet which includes a BitTorrent UDP magic constant, action, and transaction ID.
 It returns a Connection object containing the trackers connection ID and transaction ID.
 */
@@ -257,7 +234,7 @@ func (c *Connection) Close() {
 }
 
 /*
-TrackerAnnounce sends an announce request to the tracker.
+AnnounceTracker sends an announce request to the tracker.
 It includes the action, transaction ID, info hash, peer ID, and other parameters.
 It returns an AnnounceResponse object containing the response from the tracker.
 */
@@ -301,6 +278,11 @@ func (c Connection) AnnounceTracker(arq AnnounceRequest, peerId [20]byte) (*Anno
 
 	var a AnnounceResponse
 	a.decodeAnnounceResponse(buf, n)
+
+	if a.Action == 3 {
+		return nil, fmt.Errorf("tracker error on announce")
+	}
+
 	return &a, nil
 }
 
