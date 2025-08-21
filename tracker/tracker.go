@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/JoelVCrasta/config"
+	"github.com/JoelVCrasta/peer"
 )
 
 type TrackerManager struct {
@@ -57,12 +58,7 @@ type AnnounceResponse struct {
 	Interval      uint32
 	Leechers      uint32
 	Seeders       uint32
-	Peers         []Peer
-}
-
-type Peer struct {
-	IpAddr net.IP
-	Port   uint16
+	Peers         []peer.Peer
 }
 
 func NewTrackerManager(trackerUrls []string, infoHash, peerId [20]byte) *TrackerManager {
@@ -83,8 +79,8 @@ Start connects to all trackers and starts announcing.
 It will periodically re-announce to the trackers.
 It returns a channel of Peer objects that can be used to connect to peers.
 */
-func (tm *TrackerManager) Start() (<-chan Peer, error) {
-	peerChan := make(chan Peer)
+func (tm *TrackerManager) StartTracker() (<-chan peer.Peer, error) {
+	peerChan := make(chan peer.Peer)
 
 	for _, url := range tm.trackerUrls {
 		go func(trackerUrl string) {
@@ -114,9 +110,13 @@ func (tm *TrackerManager) Start() (<-chan Peer, error) {
 				return
 			}
 
-			log.Printf("[tracker] got %d peers from %s", len(response.Peers), trackerUrl)
+			log.Printf("[tracker] recieved peers from %s", trackerUrl)
 
 			for _, p := range response.Peers {
+				if p.IpAddr.IsUnspecified() {
+					continue
+				}
+
 				select {
 				case peerChan <- p:
 				case <-tm.ctx.Done():
@@ -144,6 +144,10 @@ func (tm *TrackerManager) Start() (<-chan Peer, error) {
 					}
 
 					for _, p := range response.Peers {
+						if p.IpAddr.IsUnspecified() {
+							continue
+						}
+
 						select {
 						case peerChan <- p:
 						case <-tm.ctx.Done():
@@ -163,7 +167,7 @@ func (tm *TrackerManager) Start() (<-chan Peer, error) {
 }
 
 // Stop stops the tracker manager and closes all connections.
-func (tm *TrackerManager) Stop() {
+func (tm *TrackerManager) StopTracker() {
 	if tm.cancel != nil {
 		tm.cancel()
 	}
@@ -289,7 +293,7 @@ func (c Connection) AnnounceTracker(arq AnnounceRequest, peerId [20]byte) (*Anno
 // decodeAnnounceResponse decodes the response from the announce request.and returns an AnnounceResponse object.
 func (a *AnnounceResponse) decodeAnnounceResponse(buf []byte, n int) {
 	peersCount := (n - 20) / 6
-	peers := make([]Peer, peersCount)
+	peers := make([]peer.Peer, peersCount)
 
 	a.Action = binary.BigEndian.Uint32(buf[0:])
 	a.TransactionId = binary.BigEndian.Uint32(buf[4:])
