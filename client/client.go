@@ -1,31 +1,33 @@
 package client
 
 import (
+	"context"
 	"encoding/binary"
 	"fmt"
 	"log"
 	"net"
+	"slices"
 	"sync"
-	"time"
 
 	"github.com/JoelVCrasta/handshake"
 	"github.com/JoelVCrasta/message"
-	"github.com/JoelVCrasta/parsing"
-	"github.com/JoelVCrasta/tracker"
+	"github.com/JoelVCrasta/peer"
 )
 
-// Client represents a torrent client that manages connections to peers and downloads pieces of the torrent.
 type Client struct {
 	ActivePeers []*ActivePeer
-	Torrent     parsing.Torrent
-
-	StartTime time.Time
+	peerChan    <-chan peer.Peer
+	dedupePeer  map[string]struct{}
+	infoHash    [20]byte
+	peerId      [20]byte
+	mu          sync.Mutex
+	ctx         context.Context
+	cancel      context.CancelFunc
 }
 
 // PeerInfo represents information about a peer connected to clover.
 type ActivePeer struct {
-	IpAddr      net.IP
-	Port        uint16
+	Peer        peer.Peer
 	Conn        net.Conn
 	PeerId      [20]byte
 	Choked      bool
@@ -33,75 +35,143 @@ type ActivePeer struct {
 	FailedCount int
 }
 
-/*
-NewClient initializes a new torrent client with the given torrent and peers.
-It connects to each peer, performs a handshake, and retrieves the bitfield from each peer.
-It returns a pointer to the Client and an error if any occurred during the process.
-*/
-func NewClient(torrent parsing.Torrent, peers []tracker.Peer, peerId [20]byte) (*Client, error) {
-	c := &Client{
-		Torrent:   torrent,
-		StartTime: time.Now(),
+func NewClient(peerChan <-chan peer.Peer, infoHash [20]byte, peerId [20]byte) *Client {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	return &Client{
+		ActivePeers: make([]*ActivePeer, 0),
+		peerChan:    peerChan,
+		dedupePeer:  make(map[string]struct{}),
+		infoHash:    infoHash,
+		peerId:      peerId,
+		mu:          sync.Mutex{},
+		ctx:         ctx,
+		cancel:      cancel,
 	}
-
-	var (
-		wg           sync.WaitGroup
-		mu           sync.Mutex
-		connectCount int = 0
-	)
-
-	for _, peer := range peers {
-		wg.Add(1)
-
-		go func(peer tracker.Peer) {
-			defer wg.Done()
-
-			conn, res, err := handshake.NewHandshake(torrent.InfoHash, peerId, peer.IpAddr, peer.Port)
-			if err != nil {
-				log.Printf("[client] Failed to connect to peer %s:%d - %v", peer.IpAddr, peer.Port, err)
-				return
-			}
-
-			bitfield, err := GetBitfieldFromPeer(conn)
-			if err != nil {
-				log.Printf("[client] Failed to read bitfield to peer %s:%d - %v", peer.IpAddr, peer.Port, err)
-				conn.Close()
-				return
-			}
-
-			log.Printf("[client] Connected to peer %s:%d", peer.IpAddr, peer.Port)
-
-			active := &ActivePeer{
-				IpAddr:   peer.IpAddr,
-				Port:     peer.Port,
-				Conn:     conn,
-				PeerId:   res.PeerId,
-				Choked:   true,
-				Bitfield: bitfield,
-			}
-
-			mu.Lock()
-			c.ActivePeers = append(c.ActivePeers, active)
-			connectCount++
-			mu.Unlock()
-		}(peer)
-	}
-	wg.Wait()
-
-	if connectCount == 0 {
-		return nil, fmt.Errorf("no peers connected")
-	}
-
-	return c, nil
 }
 
-// Disconnect closes the connection to the peer and sets the Conn field to nil.
-func (p *ActivePeer) Disconnect() {
-	if p.Conn != nil {
-		log.Printf("Disconnecting from peer %s:%d", p.IpAddr, p.Port)
-		_ = p.Conn.Close()
-		p.Conn = nil
+/*
+StartClient starts the client and listens for incoming peers.
+It returns a channel of active peers that can be used to interact with the connected peers.
+*/
+func (c *Client) StartClient() <-chan *ActivePeer {
+	activePeerChan := make(chan *ActivePeer, 100)
+
+	go func() {
+		for {
+			select {
+			case <-c.ctx.Done():
+				return
+			case p, ok := <-c.peerChan:
+				if !ok {
+					return
+				}
+				go c.AddPeer(p, activePeerChan)
+			}
+		}
+	}()
+
+	return activePeerChan
+}
+
+// AddPeer connects to a peer and adds it to the active peers list.
+func (c *Client) AddPeer(p peer.Peer, apC chan<- *ActivePeer) {
+	if !c.validatePeer(p) {
+		log.Printf("[client] invalid peer: %s:%d", p.IpAddr, p.Port)
+		return
 	}
+
+	conn, res, err := handshake.NewHandshake(c.infoHash, c.peerId, p.IpAddr, p.Port)
+	if err != nil {
+		log.Printf("[client] failed to connect to peer %s:%d: %v", p.IpAddr, p.Port, err)
+		return
+	}
+
+	bitfield, err := GetBitfieldFromPeer(conn)
+	if err != nil {
+		conn.Close()
+		log.Printf("[client] failed to read bitfield from peer %s:%d: %v", p.IpAddr, p.Port, err)
+		return
+	}
+
+	log.Printf("[client] connected to peer %s:%d", p.IpAddr, p.Port)
+
+	activePeer := &ActivePeer{
+		Peer:        p,
+		Conn:        conn,
+		PeerId:      res.PeerId,
+		Choked:      true,
+		Bitfield:    bitfield,
+		FailedCount: 0,
+	}
+
+	c.mu.Lock()
+	c.ActivePeers = append(c.ActivePeers, activePeer)
+	c.mu.Unlock()
+
+	select {
+	case apC <- activePeer:
+	case <-c.ctx.Done():
+		activePeer.Disconnect()
+		return
+	}
+}
+
+// RemovePeer removes a peer from the active peers list and disconnects it.
+func (c *Client) RemovePeer(ap *ActivePeer) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	for i, cap := range c.ActivePeers {
+		if cap.Peer.IpAddr.Equal(ap.Peer.IpAddr) && cap.Peer.Port == ap.Peer.Port {
+			cap.Disconnect()
+			c.ActivePeers = slices.Delete(c.ActivePeers, i, i+1)
+			delete(c.dedupePeer, cap.Peer.String())
+		}
+	}
+}
+
+// validatePeer checks if the peer is valid and not already in the dedupe map.
+func (c *Client) validatePeer(p peer.Peer) bool {
+	if p.IpAddr == nil || p.IpAddr.IsUnspecified() {
+		return false // Invalid IP address
+	}
+
+	key := p.String()
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if _, exists := c.dedupePeer[key]; exists {
+		return false // Peer already exists
+	}
+	c.dedupePeer[key] = struct{}{}
+
+	return true // New peer
+}
+
+// Disconnect closes the connection to the peer.
+func (ap *ActivePeer) Disconnect() {
+	if ap.Conn != nil {
+		log.Printf("[client] disconnecting from peer %s:%d", ap.Peer.IpAddr, ap.Peer.Port)
+		_ = ap.Conn.Close()
+		ap.Conn = nil
+	}
+}
+
+// StopClient stops the client and disconnects all active peers.
+func (c *Client) StopClient() {
+	c.cancel()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	for _, peer := range c.ActivePeers {
+		peer.Disconnect()
+	}
+
+	c.ActivePeers = nil
+	c.dedupePeer = make(map[string]struct{})
+	log.Println("[client] stopped")
 }
 
 // GetBitfieldFromPeer reads the bitfield message right after the handshake done with the peer.
