@@ -19,8 +19,8 @@ var Config = GlobalConfig{
 	MinPeers:               10,
 	Port:                   6881,
 	TrackerConnectTimeout:  5 * time.Second,
-	PeerHandshakeTimeout:   10 * time.Second,
-	PieceMessageTimeout:    25 * time.Second,
+	PeerHandshakeTimeout:   20 * time.Second,
+	PieceMessageTimeout:    30 * time.Second,
 	DefaultTrackerInterval: 1800, // 20 minutes
 	DownloadDirectory:      "./Downloads",
 	MaxTrackerConnections:  20,

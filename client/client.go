@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"slices"
 	"sync"
+	"time"
 
 	"github.com/JoelVCrasta/handshake"
 	"github.com/JoelVCrasta/message"
@@ -15,14 +15,13 @@ import (
 )
 
 type Client struct {
-	ActivePeers []*ActivePeer
-	peerChan    <-chan peer.Peer
-	dedupePeer  map[string]struct{}
-	infoHash    [20]byte
-	peerId      [20]byte
-	mu          sync.Mutex
-	ctx         context.Context
-	cancel      context.CancelFunc
+	peerChan   <-chan peer.Peer
+	dedupePeer map[string]time.Time
+	infoHash   [20]byte
+	peerId     [20]byte
+	mu         sync.Mutex
+	ctx        context.Context
+	cancel     context.CancelFunc
 }
 
 // PeerInfo represents information about a peer connected to clover.
@@ -39,14 +38,13 @@ func NewClient(peerChan <-chan peer.Peer, infoHash [20]byte, peerId [20]byte) *C
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &Client{
-		ActivePeers: make([]*ActivePeer, 0),
-		peerChan:    peerChan,
-		dedupePeer:  make(map[string]struct{}),
-		infoHash:    infoHash,
-		peerId:      peerId,
-		mu:          sync.Mutex{},
-		ctx:         ctx,
-		cancel:      cancel,
+		peerChan:   peerChan,
+		dedupePeer: make(map[string]time.Time),
+		infoHash:   infoHash,
+		peerId:     peerId,
+		mu:         sync.Mutex{},
+		ctx:        ctx,
+		cancel:     cancel,
 	}
 }
 
@@ -55,7 +53,7 @@ StartClient starts the client and listens for incoming peers.
 It returns a channel of active peers that can be used to interact with the connected peers.
 */
 func (c *Client) StartClient() <-chan *ActivePeer {
-	activePeerChan := make(chan *ActivePeer, 100)
+	activePeerChan := make(chan *ActivePeer, 1000)
 
 	go func() {
 		for {
@@ -76,6 +74,10 @@ func (c *Client) StartClient() <-chan *ActivePeer {
 
 // AddPeer connects to a peer and adds it to the active peers list.
 func (c *Client) AddPeer(p peer.Peer, apC chan<- *ActivePeer) {
+	if c.ctx.Err() != nil {
+		return // Client is stopped
+	}
+
 	if !c.validatePeer(p) {
 		log.Printf("[client] invalid peer: %s:%d", p.IpAddr, p.Port)
 		return
@@ -105,31 +107,29 @@ func (c *Client) AddPeer(p peer.Peer, apC chan<- *ActivePeer) {
 		FailedCount: 0,
 	}
 
-	c.mu.Lock()
-	c.ActivePeers = append(c.ActivePeers, activePeer)
-	c.mu.Unlock()
-
 	select {
 	case apC <- activePeer:
 	case <-c.ctx.Done():
 		activePeer.Disconnect()
 		return
+	default:
+		activePeer.Disconnect()
 	}
 }
 
 // RemovePeer removes a peer from the active peers list and disconnects it.
-func (c *Client) RemovePeer(ap *ActivePeer) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+// func (c *Client) RemovePeer(ap *ActivePeer) {
+// 	c.mu.Lock()
+// 	defer c.mu.Unlock()
 
-	for i, cap := range c.ActivePeers {
-		if cap.Peer.IpAddr.Equal(ap.Peer.IpAddr) && cap.Peer.Port == ap.Peer.Port {
-			cap.Disconnect()
-			c.ActivePeers = slices.Delete(c.ActivePeers, i, i+1)
-			delete(c.dedupePeer, cap.Peer.String())
-		}
-	}
-}
+// 	for i, cap := range c.ActivePeers {
+// 		if cap.Peer.IpAddr.Equal(ap.Peer.IpAddr) && cap.Peer.Port == ap.Peer.Port {
+// 			cap.Disconnect()
+// 			c.ActivePeers = slices.Delete(c.ActivePeers, i, i+1)
+// 			delete(c.dedupePeer, cap.Peer.String())
+// 		}
+// 	}
+// }
 
 // validatePeer checks if the peer is valid and not already in the dedupe map.
 func (c *Client) validatePeer(p peer.Peer) bool {
@@ -142,10 +142,12 @@ func (c *Client) validatePeer(p peer.Peer) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if _, exists := c.dedupePeer[key]; exists {
-		return false // Peer already exists
+	if lastSeen, exists := c.dedupePeer[key]; exists {
+		if time.Since(lastSeen) < 5*time.Minute {
+			return false // Cooldown period not over
+		}
 	}
-	c.dedupePeer[key] = struct{}{}
+	c.dedupePeer[key] = time.Time{}
 
 	return true // New peer
 }
@@ -159,18 +161,13 @@ func (ap *ActivePeer) Disconnect() {
 	}
 }
 
-// StopClient stops the client and disconnects all active peers.
+// StopClient stops the client
 func (c *Client) StopClient() {
 	c.cancel()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	for _, peer := range c.ActivePeers {
-		peer.Disconnect()
-	}
-
-	c.ActivePeers = nil
-	c.dedupePeer = make(map[string]struct{})
+	c.dedupePeer = make(map[string]time.Time)
 	log.Println("[client] stopped")
 }
 
