@@ -53,7 +53,7 @@ StartClient starts the client and listens for incoming peers.
 It returns a channel of active peers that can be used to interact with the connected peers.
 */
 func (c *Client) StartClient() <-chan *ActivePeer {
-	activePeerChan := make(chan *ActivePeer, 1000)
+	activePeerChan := make(chan *ActivePeer, 500)
 
 	go func() {
 		for {
@@ -64,6 +64,7 @@ func (c *Client) StartClient() <-chan *ActivePeer {
 				if !ok {
 					return
 				}
+				// time.Sleep(100 * time.Millisecond)
 				go c.AddPeer(p, activePeerChan)
 			}
 		}
@@ -79,13 +80,13 @@ func (c *Client) AddPeer(p peer.Peer, apC chan<- *ActivePeer) {
 	}
 
 	if !c.validatePeer(p) {
-		log.Printf("[client] invalid peer: %s:%d", p.IpAddr, p.Port)
+		// log.Printf("[client] invalid peer: %s:%d", p.IpAddr, p.Port)
 		return
 	}
 
 	conn, res, err := handshake.NewHandshake(c.infoHash, c.peerId, p.IpAddr, p.Port)
 	if err != nil {
-		log.Printf("[client] failed to connect to peer %s:%d: %v", p.IpAddr, p.Port, err)
+		// log.Printf("[client] failed to connect to peer %s:%d: %v", p.IpAddr, p.Port, err)
 		return
 	}
 
@@ -96,7 +97,7 @@ func (c *Client) AddPeer(p peer.Peer, apC chan<- *ActivePeer) {
 		return
 	}
 
-	log.Printf("[client] connected to peer %s:%d", p.IpAddr, p.Port)
+	// log.Printf("[client] connected to peer %s:%d", p.IpAddr, p.Port)
 
 	activePeer := &ActivePeer{
 		Peer:        p,
