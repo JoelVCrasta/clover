@@ -25,21 +25,9 @@ type DownloadManager struct {
 	workQueue        chan int
 	downloadedPieces []bool
 
-	stats *Stats
-
 	mu     sync.Mutex
 	ctx    context.Context
 	cancel context.CancelFunc
-}
-
-type Stats struct {
-	downloadedBytes int64
-	uploadedBytes   int64
-	activePeers     int
-	totalPeers      int
-	progress        float64
-	startTime       time.Time
-	mu              sync.Mutex
 }
 
 type workPiece struct {
@@ -65,7 +53,6 @@ func NewDownloadManager(torrent parsing.Torrent, client *client.Client) *Downloa
 		torrent:          torrent,
 		workQueue:        make(chan int, len(torrent.PiecesHash)),
 		downloadedPieces: make([]bool, len(torrent.PiecesHash)),
-		stats:            &Stats{startTime: time.Now()},
 		mu:               sync.Mutex{},
 		ctx:              ctx,
 		cancel:           cancel,
@@ -73,42 +60,46 @@ func NewDownloadManager(torrent parsing.Torrent, client *client.Client) *Downloa
 }
 
 func (dm *DownloadManager) StartDownload(apC <-chan *client.ActivePeer) {
-	// Fill the piece queue with piece indices
+	// Queue all piece indices
 	for i := range dm.torrent.PiecesHash {
 		dm.workQueue <- i
 	}
 
-	completedPieces := make(chan *completedPiece)
+	completedPieces := make(chan *completedPiece, 16) // small buffer avoids producer blocking
 	var wg sync.WaitGroup
+	totalPieces := len(dm.torrent.PiecesHash)
 
-	// For each peer received, spawn a worker
-	for ap := range apC {
-		wg.Add(1)
-		go func(ap *client.ActivePeer) {
-			defer wg.Done()
-			dm.peerDownload(ap, completedPieces)
-		}(ap)
-	}
-
-	// Handle completed pieces
+	// Goroutine to spawn/download per peer
 	go func() {
-		for cp := range completedPieces {
-			log.Printf("[download] completed piece %d", cp.index)
+		for ap := range apC {
+			wg.Add(1)
+			go func(ap *client.ActivePeer) {
+				defer wg.Done()
+				dm.peerDownload(ap, completedPieces)
+			}(ap)
 		}
+		// When no more peers will arrive, wait for all workers and then close completedPieces
+		wg.Wait()
+		close(completedPieces)
 	}()
 
-	wg.Wait()
-	close(completedPieces)
-	close(dm.workQueue)
-	dm.cancel()
+	done := 0
+	for cp := range completedPieces {
+		log.Printf("[download] completed piece %d (%d/%d)", cp.index, done+1, totalPieces)
+		done++
+		if done == totalPieces {
+			// All pieces done: stop giving out more work and cancel context
+			close(dm.workQueue)
+			dm.cancel()
+		}
+	}
+
 	log.Println("[download] download completed")
 }
 
 func (dm *DownloadManager) peerDownload(ap *client.ActivePeer, cp chan *completedPiece) {
-	log.Printf("[download] starting download from peer %s:%d", ap.Peer.IpAddr, ap.Peer.Port)
 	defer ap.Disconnect()
 
-	_ = ap.SendUnchoke()
 	_ = ap.SendInterested()
 
 	for work := range dm.workQueue {
@@ -127,7 +118,7 @@ func (dm *DownloadManager) peerDownload(ap *client.ActivePeer, cp chan *complete
 			continue
 		}
 
-		log.Printf("[download] downloading piece %d from peer %s:%d", work, ap.Peer.IpAddr, ap.Peer.Port)
+		// log.Printf("[download] downloading piece %d from peer %s:%d", work, ap.Peer.IpAddr, ap.Peer.Port)
 
 		length := dm.calculatePieceLength(work)
 		wp := &workPiece{
@@ -172,22 +163,17 @@ func (dm *DownloadManager) peerDownload(ap *client.ActivePeer, cp chan *complete
 // downloadPiece manages the download of a single piece from the peer.
 func (wp *workPiece) downloadPiece(ap *client.ActivePeer) error {
 	for wp.downloadedBytes < wp.length {
-		if !ap.Choked {
-			for wp.backlog < MAX_BACKLOG && wp.requestedBytes < wp.length {
-				// Calculate the size of the next request
-				blockSize := MAX_BLOCK_SIZE
-				remaining := wp.length - wp.requestedBytes
-				if remaining < blockSize {
-					blockSize = remaining
-				}
-
-				err := ap.SendRequest(wp.index, wp.requestedBytes, blockSize)
-				if err != nil {
-					return err
-				}
-				wp.backlog++
-				wp.requestedBytes += blockSize
+		for !ap.Choked && wp.backlog < MAX_BACKLOG && wp.requestedBytes < wp.length {
+			blockSize := MAX_BLOCK_SIZE
+			remaining := wp.length - wp.requestedBytes
+			if remaining < blockSize {
+				blockSize = remaining
 			}
+			if err := ap.SendRequest(wp.index, wp.requestedBytes, blockSize); err != nil {
+				return err
+			}
+			wp.backlog++
+			wp.requestedBytes += blockSize
 		}
 
 		err := wp.read(ap)
@@ -199,7 +185,6 @@ func (wp *workPiece) downloadPiece(ap *client.ActivePeer) error {
 	if !wp.verify() {
 		return fmt.Errorf("piece %d failed verification", wp.index)
 	}
-
 	return nil
 }
 
@@ -227,17 +212,18 @@ func (wp *workPiece) verify() bool {
 
 // read reads a message from the peer and handles it accordingly.
 func (wp *workPiece) read(ap *client.ActivePeer) error {
-	_ = ap.Conn.SetReadDeadline(time.Now().Add(config.Config.PieceMessageTimeout)) // Set read timeout
-	msg, err := message.ReadMessage(ap.Conn)
+	// Set write deadline for sending requests
+	ap.Conn.SetDeadline(time.Now().Add(config.Config.PieceMessageTimeout))
+	defer ap.Conn.SetDeadline(time.Time{})
+
+	msg, err := message.ReadPieceMessage(ap.Conn)
 	if err != nil {
 		if err == io.EOF {
 			ap.Disconnect()
-			return fmt.Errorf("connection closed by peer %s:%d", ap.Peer.IpAddr, ap.Peer.Port)
+			return fmt.Errorf("[read] connection closed by peer %s:%d", ap.Peer.IpAddr, ap.Peer.Port)
 		}
 		return err
 	}
-
-	_ = ap.Conn.SetReadDeadline(time.Time{}) // Clear deadline
 
 	if msg == nil {
 		return nil // Keep-alive message
@@ -245,11 +231,11 @@ func (wp *workPiece) read(ap *client.ActivePeer) error {
 
 	switch msg.MessageId {
 	case message.ChokeId:
-		log.Printf("peer %s:%d choked us", ap.Peer.IpAddr, ap.Peer.Port)
+		// log.Printf("peer %s:%d choked us", ap.Peer.IpAddr, ap.Peer.Port)
 		ap.Choked = true
 
 	case message.UnchokeId:
-		log.Printf("peer %s:%d unchoked us", ap.Peer.IpAddr, ap.Peer.Port)
+		// log.Printf("peer %s:%d unchoked us", ap.Peer.IpAddr, ap.Peer.Port)
 		ap.Choked = false
 
 	case message.HaveId:
@@ -273,7 +259,10 @@ func (wp *workPiece) read(ap *client.ActivePeer) error {
 		}
 		copy(wp.buf[offset:], block)
 		wp.downloadedBytes += len(block)
-		wp.backlog--
+		if wp.backlog > 0 {
+			wp.backlog--
+		}
+		// log.Printf("[block] piece %d: downloaded %d/%d bytes", wp.index, wp.downloadedBytes, wp.length)
 
 	case message.PortId:
 		return nil

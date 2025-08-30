@@ -98,6 +98,32 @@ func ReadMessage(conn net.Conn) (*Message, error) {
 	return &m, nil
 }
 
+func ReadPieceMessage(reader io.Reader) (*Message, error) {
+	lengthBuf := make([]byte, 4)
+
+	if _, err := io.ReadFull(reader, lengthBuf); err != nil {
+		return nil, err
+	}
+
+	length := binary.BigEndian.Uint32(lengthBuf)
+	if length == 0 {
+		return nil, nil // KeepAlive message
+	}
+
+	msg := make([]byte, length)
+	if _, err := io.ReadFull(reader, msg); err != nil {
+		return nil, err
+	}
+
+	fullMessage := make([]byte, 4+length)
+	copy(fullMessage, lengthBuf)
+	copy(fullMessage[4:], msg)
+
+	var m Message
+	m.decodeMessage(fullMessage)
+	return &m, nil
+}
+
 // encodeMessage encodes the message into a byte slice.
 func (m *Message) EncodeMessage() []byte {
 	buf := make([]byte, 4+m.LengthPrefix)
