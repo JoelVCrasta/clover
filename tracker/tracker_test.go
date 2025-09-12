@@ -4,13 +4,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/JoelVCrasta/parsing"
-	"github.com/JoelVCrasta/peer"
-	"github.com/JoelVCrasta/tracker"
+	"github.com/JoelVCrasta/clover/metainfo"
+	"github.com/JoelVCrasta/clover/peer"
+	"github.com/JoelVCrasta/clover/tracker"
 )
 
 func TestTracker(t *testing.T) {
-	var data parsing.Torrent
+	var data metainfo.Torrent
 
 	if err := data.Torrent("../assets/bot.torrent"); err != nil {
 		t.Fatalf("Failed to initialize torrent (%v)", err)

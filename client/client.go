@@ -9,9 +9,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/JoelVCrasta/handshake"
-	"github.com/JoelVCrasta/message"
-	"github.com/JoelVCrasta/peer"
+	"github.com/JoelVCrasta/clover/handshake"
+	"github.com/JoelVCrasta/clover/message"
+	"github.com/JoelVCrasta/clover/peer"
 )
 
 type Client struct {

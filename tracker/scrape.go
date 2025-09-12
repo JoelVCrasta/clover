@@ -5,7 +5,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/JoelVCrasta/config"
+	"github.com/JoelVCrasta/clover/config"
 )
 
 type ScrapeRequest struct {

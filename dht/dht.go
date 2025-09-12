@@ -6,7 +6,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/JoelVCrasta/peer"
+	"github.com/JoelVCrasta/clover/peer"
 	"github.com/anacrolix/dht/v2"
 )
 

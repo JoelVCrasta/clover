@@ -9,8 +9,8 @@ import (
 	"net"
 	"time"
 
-	"github.com/JoelVCrasta/config"
-	"github.com/JoelVCrasta/peer"
+	"github.com/JoelVCrasta/clover/config"
+	"github.com/JoelVCrasta/clover/peer"
 )
 
 type TrackerManager struct {

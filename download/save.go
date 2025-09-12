@@ -5,8 +5,8 @@ import (
 	"os"
 	"path"
 
-	"github.com/JoelVCrasta/config"
-	"github.com/JoelVCrasta/parsing"
+	"github.com/JoelVCrasta/clover/config"
+	"github.com/JoelVCrasta/clover/metainfo"
 )
 
 type FileRegion struct {
@@ -17,7 +17,7 @@ type FileRegion struct {
 	File   *os.File
 }
 
-func createSaveFile(torrent parsing.Torrent) (*os.File, error) {
+func createSaveFile(torrent metainfo.Torrent) (*os.File, error) {
 	downloadDir := config.Config.DownloadDirectory
 
 	// Multifile torrent

@@ -8,22 +8,24 @@ import (
 	"io"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 
-	"github.com/JoelVCrasta/client"
-	"github.com/JoelVCrasta/config"
-	"github.com/JoelVCrasta/message"
-	"github.com/JoelVCrasta/parsing"
+	"github.com/JoelVCrasta/clover/client"
+	"github.com/JoelVCrasta/clover/config"
+	"github.com/JoelVCrasta/clover/message"
+	"github.com/JoelVCrasta/clover/metainfo"
 )
 
 const MAX_BLOCK_SIZE = 16384 // 16 KiB
-const MAX_BACKLOG = 5
+const MAX_BACKLOG = 10
 
 type DownloadManager struct {
 	client           *client.Client
-	torrent          parsing.Torrent
+	torrent          metainfo.Torrent
 	workQueue        chan int
 	downloadedPieces []bool
+	peerCount        int32
 
 	mu     sync.Mutex
 	ctx    context.Context
@@ -45,7 +47,7 @@ type completedPiece struct {
 	buf   []byte
 }
 
-func NewDownloadManager(torrent parsing.Torrent, client *client.Client) *DownloadManager {
+func NewDownloadManager(torrent metainfo.Torrent, client *client.Client) *DownloadManager {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &DownloadManager{
@@ -54,38 +56,38 @@ func NewDownloadManager(torrent parsing.Torrent, client *client.Client) *Downloa
 		workQueue:        make(chan int, len(torrent.PiecesHash)),
 		downloadedPieces: make([]bool, len(torrent.PiecesHash)),
 		mu:               sync.Mutex{},
+		peerCount:        0,
 		ctx:              ctx,
 		cancel:           cancel,
 	}
 }
 
 func (dm *DownloadManager) StartDownload(apC <-chan *client.ActivePeer) {
-	// Queue all piece indices
 	for i := range dm.torrent.PiecesHash {
 		dm.workQueue <- i
 	}
 
-	completedPieces := make(chan *completedPiece, 16) // small buffer avoids producer blocking
+	completedPieces := make(chan *completedPiece, 50)
 	var wg sync.WaitGroup
 	totalPieces := len(dm.torrent.PiecesHash)
 
-	// Goroutine to spawn/download per peer
 	go func() {
 		for ap := range apC {
 			wg.Add(1)
 			go func(ap *client.ActivePeer) {
 				defer wg.Done()
+				atomic.AddInt32(&dm.peerCount, 1)
 				dm.peerDownload(ap, completedPieces)
 			}(ap)
 		}
-		// When no more peers will arrive, wait for all workers and then close completedPieces
+
 		wg.Wait()
 		close(completedPieces)
 	}()
 
 	done := 0
 	for cp := range completedPieces {
-		log.Printf("[download] completed piece %d (%d/%d)", cp.index, done+1, totalPieces)
+		log.Printf("[download] completed piece %d (%d/%d) (Peers: %d)", cp.index, done+1, totalPieces, atomic.LoadInt32(&dm.peerCount))
 		done++
 		if done == totalPieces {
 			// All pieces done: stop giving out more work and cancel context
@@ -98,7 +100,10 @@ func (dm *DownloadManager) StartDownload(apC <-chan *client.ActivePeer) {
 }
 
 func (dm *DownloadManager) peerDownload(ap *client.ActivePeer, cp chan *completedPiece) {
-	defer ap.Disconnect()
+	defer func() {
+		atomic.AddInt32(&dm.peerCount, -1)
+		ap.Disconnect()
+	}()
 
 	_ = ap.SendInterested()
 
@@ -146,7 +151,6 @@ func (dm *DownloadManager) peerDownload(ap *client.ActivePeer, cp chan *complete
 			continue
 		}
 
-		// Mark piece as downloaded
 		dm.mu.Lock()
 		dm.downloadedPieces[work] = true
 		dm.mu.Unlock()
@@ -212,7 +216,6 @@ func (wp *workPiece) verify() bool {
 
 // read reads a message from the peer and handles it accordingly.
 func (wp *workPiece) read(ap *client.ActivePeer) error {
-	// Set write deadline for sending requests
 	ap.Conn.SetDeadline(time.Now().Add(config.Config.PieceMessageTimeout))
 	defer ap.Conn.SetDeadline(time.Time{})
 

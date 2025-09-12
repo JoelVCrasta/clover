@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/JoelVCrasta/dht"
-	"github.com/JoelVCrasta/peer"
-	"github.com/JoelVCrasta/tracker"
+	"github.com/JoelVCrasta/clover/dht"
+	"github.com/JoelVCrasta/clover/peer"
+	"github.com/JoelVCrasta/clover/tracker"
 )
 
 func StartPeerDiscovery(announceList []string, infoHash [20]byte, peerId [20]byte) (<-chan peer.Peer, context.CancelFunc, error) {

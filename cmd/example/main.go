@@ -3,15 +3,15 @@ package main
 import (
 	"log"
 
-	torrent "github.com/JoelVCrasta"
-	"github.com/JoelVCrasta/client"
-	"github.com/JoelVCrasta/download"
-	"github.com/JoelVCrasta/parsing"
-	"github.com/JoelVCrasta/peer"
+	torrent "github.com/JoelVCrasta/clover"
+	"github.com/JoelVCrasta/clover/client"
+	"github.com/JoelVCrasta/clover/download"
+	"github.com/JoelVCrasta/clover/metainfo"
+	"github.com/JoelVCrasta/clover/peer"
 )
 
 func main() {
-	var tr parsing.Torrent
+	var tr metainfo.Torrent
 	err := tr.Torrent("assets/sc.torrent")
 	if err != nil {
 		log.Fatal(err)

@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/JoelVCrasta/config"
+	"github.com/JoelVCrasta/clover/config"
 )
 
 type Handshake struct {
