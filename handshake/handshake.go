@@ -21,7 +21,7 @@ NewHandshake establishes a TCP connection to a peer and performs the BitTorrent 
 It sends a handshake request containing the info hash and peer ID, and waits for a response.
 It returns the connection, the handshake response, and any error encountered.
 */
-func NewHandshake(infoHash, peerId [20]byte, peerIp net.IP, peerPort uint16) (net.Conn, *Handshake, error) {
+func SendHandshake(infoHash, peerId [20]byte, peerIp net.IP, peerPort uint16) (net.Conn, *Handshake, error) {
 	request := getHandshakePayload(infoHash, peerId)
 	peerAddress := net.JoinHostPort(peerIp.String(), strconv.Itoa(int(peerPort)))
 

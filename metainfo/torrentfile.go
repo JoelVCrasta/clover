@@ -84,7 +84,7 @@ It takes a byte slice as input and populates the Torrent struct fields.
 It returns an error if any required fields are missing or if the decoding fails.
 */
 func (t *Torrent) populateTorrent(bencodeByteStream []byte) error {
-	decoded, err := t.Decode(bencodeByteStream)
+	decoded, err := BencodeDecode(bencodeByteStream)
 	if err != nil {
 		return fmt.Errorf("%v", err)
 	}
@@ -224,7 +224,7 @@ func (t *Torrent) populateTorrent(bencodeByteStream []byte) error {
 	}
 
 	// Encode the info dictionary to bencoded byte stream
-	infoEncoded, err := t.Encode(torrent["info"])
+	infoEncoded, err := BencodeMarshall(torrent["info"])
 	if err != nil {
 		return err
 	}

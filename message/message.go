@@ -22,6 +22,8 @@ const (
 	PieceId
 	CancelId
 	PortId
+
+	Extended = 20
 )
 
 // lengthPrefix is the length of the message prefix for each message type

@@ -6,7 +6,7 @@ import (
 )
 
 // Decode function takes a byte slice and returns the decoded value
-func (t Torrent) Decode(buf []byte) (any, error) {
+func BencodeDecode(buf []byte) (any, error) {
 	result, pos, err := parseValue(buf, 0)
 	if err != nil {
 		return nil, err

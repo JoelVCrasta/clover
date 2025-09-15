@@ -8,7 +8,7 @@ import (
 )
 
 // Encode function takes a value and returns its bencoded representation as a byte slice
-func (t Torrent) Encode(value any) ([]byte, error) {
+func BencodeMarshall(value any) ([]byte, error) {
 	var buf bytes.Buffer
 
 	err := encodeValue(&buf, value)

@@ -84,7 +84,7 @@ func (c *Client) AddPeer(p peer.Peer, apC chan<- *ActivePeer) {
 		return
 	}
 
-	conn, res, err := handshake.NewHandshake(c.infoHash, c.peerId, p.IpAddr, p.Port)
+	conn, res, err := handshake.SendHandshake(c.infoHash, c.peerId, p.IpAddr, p.Port)
 	if err != nil {
 		// log.Printf("[client] failed to connect to peer %s:%d: %v", p.IpAddr, p.Port, err)
 		return
