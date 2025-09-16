@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/url"
 	"os"
+	"path/filepath"
 )
 
 type Torrent struct {
@@ -13,17 +14,10 @@ type Torrent struct {
 	CreatedBy    string
 	CreationDate int
 	Comment      string
-	Encoding     string
 	Info         Info
-
-	// InfoHash is the SHA-1 hash of the info dictionary
-	InfoHash [20]byte
-
-	// PiecesHash is the SHA-1 hash of each piece in the torrent
-	PiecesHash [][20]byte
-
-	// Check if the torrent is a multi-file torrent
-	IsMultiFile bool
+	InfoHash     [20]byte
+	PiecesHash   [][20]byte
+	IsMultiFile  bool
 }
 
 type Info struct {
@@ -31,38 +25,31 @@ type Info struct {
 	Length      int
 	PieceLength int
 	Pieces      []byte
-	Private     int
 	Files       []File
 }
 
 type File struct {
 	Length int
-	Path   []string
-	MD5sum []byte
+	Path   string
+	Offset int
 }
 
-/*
-Init initializes the Torrent struct by loading a torrent file from the specified path.
-It returns an error if any required fields are missing or if the decoding fails.
-*/
+// Torrent loads and parses a torrent file from the specified path, populating the Torrent struct fields.
 func (t *Torrent) Torrent(filePath string) error {
 	bencodeByteStream, err := t.loadTorrentFile(filePath)
 	if err != nil {
-		return fmt.Errorf("failed to load torrent file: %v", err)
+		return fmt.Errorf("[torrent] %v", err)
 	}
 
 	err = t.populateTorrent(bencodeByteStream)
 	if err != nil {
-		return fmt.Errorf("failed to populate torrent: %v", err)
+		return fmt.Errorf("[torrent] %v", err)
 	}
 
 	return nil
 }
 
-/*
-LoadTorrentFile loads a torrent file from the specified path.
-It returns the bencoded byte stream and an error if any occurs.
-*/
+// loadTorrentFile reads the torrent file from the specified path and returns its content as a byte slice.
 func (t Torrent) loadTorrentFile(filePath string) ([]byte, error) {
 	file, err := os.Open(filePath)
 	if err != nil {
@@ -78,27 +65,21 @@ func (t Torrent) loadTorrentFile(filePath string) ([]byte, error) {
 	return becodedData, nil
 }
 
-/*
-Init initializes the Torrent struct by decoding the bencoded byte stream.
-It takes a byte slice as input and populates the Torrent struct fields.
-It returns an error if any required fields are missing or if the decoding fails.
-*/
+// populateTorrent decodes the bencoded byte stream and populates the Torrent struct fields.
 func (t *Torrent) populateTorrent(bencodeByteStream []byte) error {
-	decoded, err := BencodeDecode(bencodeByteStream)
+	decoded, err := BencodeUnmarshall(bencodeByteStream)
 	if err != nil {
 		return fmt.Errorf("%v", err)
 	}
 
 	torrent, ok := decoded.(map[string]any)
 	if !ok {
-		return fmt.Errorf("failed to assert decoded data to map[string]any")
+		return fmt.Errorf("invalid torrent file format")
 	}
 
-	// Required: announce
+	// Optional: announce
 	if announce, ok := torrent["announce"].([]byte); ok {
 		t.Announce = string(announce)
-	} else {
-		return fmt.Errorf("missing required field: announce")
 	}
 
 	// Required: info
@@ -118,7 +99,7 @@ func (t *Torrent) populateTorrent(bencodeByteStream []byte) error {
 	if pieceLength, ok := info["piece length"].(int); ok {
 		t.Info.PieceLength = pieceLength
 	} else {
-		return fmt.Errorf("missing required field: info.piece length")
+		return fmt.Errorf("missing required field: info.piecelength")
 	}
 
 	// Required: pieces
@@ -128,50 +109,49 @@ func (t *Torrent) populateTorrent(bencodeByteStream []byte) error {
 		return fmt.Errorf("missing required field: info.pieces")
 	}
 
-	// Optional: private
-	if private, ok := info["private"].(int); ok {
-		t.Info.Private = private
-	}
-
 	// Handle single-file OR multi-file
 	if length, ok := info["length"].(int); ok {
 		// Single-file mode
 		t.Info.Length = length
 	} else if files, ok := info["files"].([]any); ok {
 		// Multi-file mode
+		offset := 0
+
 		for _, file := range files {
 			var f File
+
 			if fileInfo, ok := file.(map[string]any); ok {
-				// Required: file length
+				// Required: length
 				if length, ok := fileInfo["length"].(int); ok {
 					f.Length = length
 				} else {
-					return fmt.Errorf("missing required field: file length")
+					return fmt.Errorf("missing required field: filelength")
 				}
 
-				// Required: file path
+				var pathParts []string
+				pathParts = append(pathParts, t.Info.Name) // Prepend the root directory
+
+				// Required: paths
 				if path, ok := fileInfo["path"].([]any); ok {
 					for _, p := range path {
 						if str, ok := p.([]byte); ok {
-							f.Path = append(f.Path, string(str))
+							pathParts = append(pathParts, string(str))
 						} else {
 							return fmt.Errorf("invalid file path entry")
 						}
 					}
 				} else {
-					return fmt.Errorf("missing required field: file path")
+					return fmt.Errorf("missing required field: filepath")
 				}
 
-				// Optional: md5sum
-				if md5sum, ok := fileInfo["md5sum"].([]byte); ok {
-					f.MD5sum = md5sum
-				}
-
+				f.Path = filepath.Join(pathParts...)
+				f.Offset = offset
+				offset += f.Length
 				t.Info.Files = append(t.Info.Files, f)
 			}
 		}
 
-		t.Info.Length = t.calulateMultiFileLength()
+		t.Info.Length = t.computeTotalLength()
 		t.IsMultiFile = true
 	} else {
 		return fmt.Errorf("missing required field: either info.length or info.files")
@@ -191,48 +171,37 @@ func (t *Torrent) populateTorrent(bencodeByteStream []byte) error {
 						if parsed.Scheme == "udp" {
 							t.AnnounceList = append(t.AnnounceList, parsed.Host)
 						}
-
 					} else {
 						return fmt.Errorf("invalid announce-list entry")
 					}
 				}
-
 			} else {
 				return fmt.Errorf("invalid announce-list format")
 			}
 		}
 	}
 
-	// Optional: created by
+	// Optional fields
 	if createdBy, ok := torrent["created by"].([]byte); ok {
 		t.CreatedBy = string(createdBy)
 	}
-
-	// Optional: creation date
 	if creationDate, ok := torrent["creation date"].(int); ok {
 		t.CreationDate = creationDate
 	}
-
-	// Optional: comment
 	if comment, ok := torrent["comment"].([]byte); ok {
 		t.Comment = string(comment)
 	}
 
-	// Optional: encoding
-	if encoding, ok := torrent["encoding"].([]byte); ok {
-		t.Encoding = string(encoding)
-	}
-
-	// Encode the info dictionary to bencoded byte stream
+	// Calculate the info hash
 	infoEncoded, err := BencodeMarshall(torrent["info"])
 	if err != nil {
 		return err
 	}
-	infoHash := t.HashInfoDirectory(infoEncoded)
+	infoHash := hashInfoDirectory(infoEncoded)
 	t.InfoHash = infoHash
 
-	// Split the pieces into an array of 20-byte hashes
-	piecesHash, err := t.SplitPieces(t.Info.Pieces)
+	// Split pieces into 20 byte SHA1 hashes
+	piecesHash, err := splitPieces(t.Info.Pieces)
 	if err != nil {
 		return err
 	}
@@ -241,7 +210,7 @@ func (t *Torrent) populateTorrent(bencodeByteStream []byte) error {
 	return nil
 }
 
-func (t Torrent) calulateMultiFileLength() int {
+func (t Torrent) computeTotalLength() int {
 	totalLength := 0
 
 	for _, file := range t.Info.Files {

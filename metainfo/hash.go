@@ -5,15 +5,15 @@ import (
 	"fmt"
 )
 
-// The InfoHash function computes the SHA-1 hash of the given info byte slice.
-func (t Torrent) HashInfoDirectory(info []byte) [20]byte {
+// HashInfoDirectory computes the SHA1 hash of the bencoded info dictionary.
+func hashInfoDirectory(info []byte) [20]byte {
 	return sha1.Sum(info)
 }
 
 // splitPieces splits the pieces byte slice into an array of 20-byte hashes.
-func (t Torrent) SplitPieces(pieces []byte) ([][20]byte, error) {
+func splitPieces(pieces []byte) ([][20]byte, error) {
 	if len(pieces)%20 != 0 {
-		return nil, fmt.Errorf("pieces length is not a multiple of 20")
+		return nil, fmt.Errorf("invalid pieces length")
 	}
 
 	var hashes [][20]byte
