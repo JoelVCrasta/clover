@@ -129,7 +129,6 @@ func (t *Torrent) populateTorrent(bencodeByteStream []byte) error {
 				}
 
 				var pathParts []string
-				pathParts = append(pathParts, t.Info.Name) // Prepend the root directory
 
 				// Required: paths
 				if path, ok := fileInfo["path"].([]any); ok {

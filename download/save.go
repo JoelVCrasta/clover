@@ -1,42 +1,99 @@
 package download
 
 import (
+	"context"
 	"fmt"
+	"log"
 	"os"
-	"path"
+	"path/filepath"
 
 	"github.com/JoelVCrasta/clover/config"
 	"github.com/JoelVCrasta/clover/metainfo"
 )
 
-type FileRegion struct {
-	Path   string
-	Length int
-	Start  int
-	End    int
-	File   *os.File
+type PieceWriter struct {
+	torrent metainfo.Torrent
+	files   map[string]*os.File
+
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
-func createSaveFile(torrent metainfo.Torrent) (*os.File, error) {
-	downloadDir := config.Config.DownloadDirectory
+func NewPieceWriter(torrent metainfo.Torrent) (*PieceWriter, error) {
+	ctx, cancel := context.WithCancel(context.Background())
 
-	// Multifile torrent
+	pw := &PieceWriter{
+		torrent: torrent,
+		files:   make(map[string]*os.File),
+		ctx:     ctx,
+		cancel:  cancel,
+	}
+
+	root := filepath.Join(config.Config.DownloadDirectory, torrent.Info.Name)
+
+	cleanup := func() {
+		pw.CloseWriter()
+		_ = os.RemoveAll(root)
+	}
+	defer func() {
+		if cleanup != nil {
+			cleanup()
+		}
+	}()
+
 	if torrent.IsMultiFile {
-		path := path.Join(downloadDir, torrent.Info.Name)
-		err := os.MkdirAll(path, 0755)
+		err := os.MkdirAll(root, 0755)
 		if err != nil {
-			return nil, fmt.Errorf("failed to create download directory: %w", err)
+			return nil, fmt.Errorf("failed to create root dir: %v", err)
 		}
 
-		return nil, nil
+		for _, file := range torrent.Info.Files {
+			fullPath := filepath.Join(root, file.Path)
+			dir := filepath.Dir(fullPath)
+
+			err := os.MkdirAll(dir, 0755)
+			if err != nil {
+				return nil, fmt.Errorf("failed to create subdir: %v", err)
+			}
+
+			f, err := os.Create(fullPath)
+			if err != nil {
+				return nil, fmt.Errorf("failed to create file: %v", err)
+			}
+
+			if err := f.Truncate(int64(file.Length)); err != nil {
+				f.Close()
+				return nil, fmt.Errorf("failed to preallocate file: %v", err)
+			}
+
+			pw.files[fullPath] = f
+		}
+	} else {
+		file, err := os.Create(root)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create file: %v", err)
+		}
+
+		if err := file.Truncate(int64(torrent.Info.Length)); err != nil {
+			file.Close()
+			return nil, fmt.Errorf("failed to preallocate file: %v", err)
+		}
+
+		pw.files[root] = file
 	}
 
-	// Single file torrent
-	path := path.Join(downloadDir, torrent.Info.Name)
-	file, err := os.Create(path)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create save file: %w", err)
-	}
+	cleanup = nil
+	return pw, nil
+}
 
-	return file, nil
+func (pw *PieceWriter) WritePiece(cP <-chan *completedPiece) error {
+}
+
+func (pw *PieceWriter) CloseWriter() {
+	for _, file := range pw.files {
+		_ = file.Close()
+	}
+	pw.cancel()
+
+	log.Println("[download] piece writer closed")
 }
