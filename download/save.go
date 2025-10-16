@@ -69,6 +69,11 @@ func NewPieceWriter(torrent metainfo.Torrent) (*PieceWriter, error) {
 			pw.files[fullPath] = f
 		}
 	} else {
+		dir := filepath.Dir(root)
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return nil, fmt.Errorf("failed to create download dir: %v", err)
+		}
+
 		file, err := os.Create(root)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create file: %v", err)
@@ -84,9 +89,6 @@ func NewPieceWriter(torrent metainfo.Torrent) (*PieceWriter, error) {
 
 	cleanup = nil
 	return pw, nil
-}
-
-func (pw *PieceWriter) WritePiece(cP <-chan *completedPiece) error {
 }
 
 func (pw *PieceWriter) CloseWriter() {
