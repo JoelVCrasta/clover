@@ -43,8 +43,9 @@ type workPiece struct {
 }
 
 type completedPiece struct {
-	index int
-	buf   []byte
+	index  int
+	length int
+	buf    []byte
 }
 
 func NewDownloadManager(torrent metainfo.Torrent, client *client.Client) *DownloadManager {
@@ -145,6 +146,7 @@ func (dm *DownloadManager) peerDownload(ap *client.ActivePeer, cp chan *complete
 			// If the peer has failed too many times, disconnect
 			if ap.FailedCount >= config.Config.MaxFailedRetries {
 				log.Printf("[download] Peer %s:%d has failed too many times, disconnecting", ap.Peer.IpAddr, ap.Peer.Port)
+				atomic.AddInt32(&dm.peerCount, -1)
 				ap.Disconnect()
 				return
 			}
@@ -157,8 +159,9 @@ func (dm *DownloadManager) peerDownload(ap *client.ActivePeer, cp chan *complete
 
 		ap.SendHave(wp.index)
 		cp <- &completedPiece{
-			index: wp.index,
-			buf:   wp.buf,
+			index:  wp.index,
+			length: wp.length,
+			buf:    wp.buf,
 		}
 	}
 
