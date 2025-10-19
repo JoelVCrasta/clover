@@ -1,7 +1,6 @@
 package download
 
 import (
-	"context"
 	"fmt"
 	"log"
 	"os"
@@ -14,19 +13,12 @@ import (
 type PieceWriter struct {
 	torrent metainfo.Torrent
 	files   map[string]*os.File
-
-	ctx    context.Context
-	cancel context.CancelFunc
 }
 
 func NewPieceWriter(torrent metainfo.Torrent) (*PieceWriter, error) {
-	ctx, cancel := context.WithCancel(context.Background())
-
 	pw := &PieceWriter{
 		torrent: torrent,
 		files:   make(map[string]*os.File),
-		ctx:     ctx,
-		cancel:  cancel,
 	}
 
 	root := filepath.Join(config.Config.DownloadDirectory, torrent.Info.Name)
@@ -149,7 +141,5 @@ func (pw *PieceWriter) CloseWriter() {
 	for _, file := range pw.files {
 		_ = file.Close()
 	}
-	pw.cancel()
-
 	log.Println("[download] piece writer closed")
 }
