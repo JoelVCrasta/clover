@@ -86,13 +86,31 @@ func (dm *DownloadManager) StartDownload(apC <-chan *client.ActivePeer) {
 		close(completedPieces)
 	}()
 
+	pw, err := NewPieceWriter(dm.torrent)
+	if err != nil {
+		log.Fatalf("[download] failed to create piece writer: %v", err)
+	}
+	defer pw.CloseWriter()
+
 	done := 0
 	for cp := range completedPieces {
+		err := pw.WritePiece(cp)
+		if err != nil {
+			log.Printf("[download] failed to write piece %d: %v", cp.index, err)
+			// Re-queue the piece for download
+			dm.mu.Lock()
+			dm.downloadedPieces[cp.index] = false
+			dm.mu.Unlock()
+			dm.workQueue <- cp.index
+			continue
+		}
+
 		log.Printf("[download] completed piece %d (%d/%d) (Peers: %d)", cp.index, done+1, totalPieces, atomic.LoadInt32(&dm.peerCount))
 		done++
 		if done == totalPieces {
 			// All pieces done: stop giving out more work and cancel context
 			close(dm.workQueue)
+			close(completedPieces)
 			dm.cancel()
 		}
 	}
