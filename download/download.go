@@ -83,7 +83,6 @@ func (dm *DownloadManager) StartDownload(apC <-chan *client.ActivePeer) {
 		}
 
 		wg.Wait()
-		close(completedPieces)
 	}()
 
 	pw, err := NewPieceWriter(dm.torrent)
@@ -157,6 +156,11 @@ func (dm *DownloadManager) peerDownload(ap *client.ActivePeer, cp chan *complete
 
 		err := wp.downloadPiece(ap)
 		if err != nil {
+			if err == io.EOF {
+				log.Printf("[download] peer %s:%d disconnected", ap.Peer.IpAddr, ap.Peer.Port)
+				return
+			}
+
 			log.Printf("[download] error downloading piece %d from peer %s:%d: %v", work, ap.Peer.IpAddr, ap.Peer.Port, err)
 			dm.workQueue <- work
 			ap.FailedCount++
@@ -164,8 +168,6 @@ func (dm *DownloadManager) peerDownload(ap *client.ActivePeer, cp chan *complete
 			// If the peer has failed too many times, disconnect
 			if ap.FailedCount >= config.Config.MaxFailedRetries {
 				log.Printf("[download] Peer %s:%d has failed too many times, disconnecting", ap.Peer.IpAddr, ap.Peer.Port)
-				atomic.AddInt32(&dm.peerCount, -1)
-				ap.Disconnect()
 				return
 			}
 			continue
@@ -242,10 +244,6 @@ func (wp *workPiece) read(ap *client.ActivePeer) error {
 
 	msg, err := message.ReadPieceMessage(ap.Conn)
 	if err != nil {
-		if err == io.EOF {
-			ap.Disconnect()
-			return fmt.Errorf("[read] connection closed by peer %s:%d", ap.Peer.IpAddr, ap.Peer.Port)
-		}
 		return err
 	}
 
