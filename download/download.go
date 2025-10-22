@@ -110,6 +110,7 @@ func (dm *DownloadManager) StartDownload(apC <-chan *client.ActivePeer) {
 			// All pieces done: stop giving out more work and cancel context
 			close(dm.workQueue)
 			close(completedPieces)
+			dm.client.StopClient()
 			dm.cancel()
 		}
 	}
