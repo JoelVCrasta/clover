@@ -10,6 +10,8 @@ import (
 	"github.com/JoelVCrasta/clover/metainfo"
 )
 
+var root_ string
+
 type PieceWriter struct {
 	torrent metainfo.Torrent
 	files   map[string]*os.File
@@ -21,7 +23,13 @@ func NewPieceWriter(torrent metainfo.Torrent) (*PieceWriter, error) {
 		files:   make(map[string]*os.File),
 	}
 
-	root := filepath.Join(config.Config.DownloadDirectory, torrent.Info.Name)
+	if torrent.OutputPath != "" {
+		root_ = torrent.OutputPath
+	} else {
+		root_ = config.Config.DownloadDirectory
+	}
+
+	root := filepath.Join(root_, torrent.Info.Name)
 
 	cleanup := func() {
 		pw.CloseWriter()
@@ -104,7 +112,7 @@ func (pw *PieceWriter) WritePiece(cp *completedPiece) error {
 			writeEnd := min(pieceEnd, fileEnd)
 			writeLen := writeEnd - writeStart
 
-			filePath := filepath.Join(config.Config.DownloadDirectory, pw.torrent.Info.Name, file.Path)
+			filePath := filepath.Join(root_, pw.torrent.Info.Name, file.Path)
 			f := pw.files[filePath]
 			if f == nil {
 				return fmt.Errorf("file not found for path: %s", filePath)
@@ -122,7 +130,7 @@ func (pw *PieceWriter) WritePiece(cp *completedPiece) error {
 			}
 		}
 	} else {
-		filePath := filepath.Join(config.Config.DownloadDirectory, pw.torrent.Info.Name)
+		filePath := filepath.Join(root_, pw.torrent.Info.Name)
 		f := pw.files[filePath]
 		if f == nil {
 			return fmt.Errorf("file not found for path: %s", filePath)

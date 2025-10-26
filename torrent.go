@@ -9,7 +9,7 @@ import (
 
 func StartTorrent(inputPath string, outputPath string) error {
 	var tr metainfo.Torrent
-	err := tr.Torrent(inputPath)
+	err := tr.Torrent(inputPath, outputPath)
 	if err != nil {
 		return err
 	}
@@ -29,6 +29,7 @@ func StartTorrent(inputPath string, outputPath string) error {
 	apC := client.StartClient()
 
 	dm := download.NewDownloadManager(tr, client)
+	// go StartTUI(dm.Stats)
 	dm.StartDownload(apC)
 
 	return nil

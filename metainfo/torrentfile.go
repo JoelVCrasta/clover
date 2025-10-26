@@ -18,6 +18,7 @@ type Torrent struct {
 	InfoHash     [20]byte
 	PiecesHash   [][20]byte
 	IsMultiFile  bool
+	OutputPath   string
 }
 
 type Info struct {
@@ -35,7 +36,7 @@ type File struct {
 }
 
 // Torrent loads and parses a torrent file from the specified path, populating the Torrent struct fields.
-func (t *Torrent) Torrent(filePath string) error {
+func (t *Torrent) Torrent(filePath string, outputPath string) error {
 	bencodeByteStream, err := t.loadTorrentFile(filePath)
 	if err != nil {
 		return fmt.Errorf("[torrent] %v", err)
@@ -46,6 +47,7 @@ func (t *Torrent) Torrent(filePath string) error {
 		return fmt.Errorf("[torrent] %v", err)
 	}
 
+	t.OutputPath = outputPath
 	return nil
 }
 
