@@ -12,7 +12,7 @@ import (
 func TestTracker(t *testing.T) {
 	var data metainfo.Torrent
 
-	if err := data.Torrent("../assets/bot.torrent"); err != nil {
+	if err := data.Torrent("../assets/bot.torrent", "."); err != nil {
 		t.Fatalf("Failed to initialize torrent (%v)", err)
 	}
 
