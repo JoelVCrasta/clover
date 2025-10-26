@@ -12,7 +12,7 @@ import (
 
 func main() {
 	var tr metainfo.Torrent
-	err := tr.Torrent("assets/sc.torrent")
+	err := tr.Torrent("assets/sc.torrent", ".")
 	if err != nil {
 		log.Fatal(err)
 	} else {
