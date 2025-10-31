@@ -41,11 +41,9 @@ It returns a channel that will receive discovered peers.
 It will periodically announce the info hash every 5 minutes.
 */
 func (d *DHT) StartDHT() (<-chan peer.Peer, error) {
-	if stats, err := d.server.Bootstrap(); err != nil {
+	if _, err := d.server.Bootstrap(); err != nil {
 		d.server.Close()
 		return nil, fmt.Errorf("[dht] bootstrap failed: %w", err)
-	} else {
-		log.Printf("[dht] bootstrap stats: %v", stats)
 	}
 
 	peerChan := make(chan peer.Peer, 500)

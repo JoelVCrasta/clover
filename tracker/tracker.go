@@ -86,7 +86,7 @@ func (tm *TrackerManager) StartTracker() (<-chan peer.Peer, error) {
 		go func(trackerUrl string) {
 			conn, err := ConnectTracker(trackerUrl)
 			if err != nil {
-				log.Printf("[tracker] failed to connect to tracker %s: %v", trackerUrl, err)
+				// log.Printf("[tracker] failed to connect to tracker %s: %v", trackerUrl, err)
 				return
 			}
 			defer conn.Close()
@@ -106,11 +106,11 @@ func (tm *TrackerManager) StartTracker() (<-chan peer.Peer, error) {
 
 			response, err := conn.AnnounceTracker(arq, tm.peerId)
 			if err != nil {
-				log.Printf("[tracker] announce failed for %s: %v", trackerUrl, err)
+				// log.Printf("[tracker] announce failed for %s: %v", trackerUrl, err)
 				return
 			}
 
-			log.Printf("[tracker] recieved peers from %s", trackerUrl)
+			// log.Printf("[tracker] recieved peers from %s", trackerUrl)
 
 			for _, p := range response.Peers {
 				if p.IpAddr.IsUnspecified() {
@@ -172,7 +172,7 @@ func (tm *TrackerManager) StopTracker() {
 		tm.cancel()
 	}
 
-	log.Println("[tracker] stopped trackers")
+	// log.Println("[tracker] stopped trackers")
 }
 
 /*

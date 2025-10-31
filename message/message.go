@@ -8,7 +8,6 @@ import (
 	"net"
 )
 
-// <lengthPrefix : 4 bytes> <messageId : 1 byte> <payload : variable size>
 type MessageId int
 
 const (

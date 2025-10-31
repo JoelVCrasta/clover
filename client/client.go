@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
-	"log"
 	"net"
 	"sync"
 	"time"
@@ -93,7 +92,7 @@ func (c *Client) AddPeer(p peer.Peer, apC chan<- *ActivePeer) {
 	bitfield, err := GetBitfieldFromPeer(conn)
 	if err != nil {
 		conn.Close()
-		log.Printf("[client] failed to read bitfield from peer %s:%d: %v", p.IpAddr, p.Port, err)
+		// log.Printf("[client] failed to read bitfield from peer %s:%d: %v", p.IpAddr, p.Port, err)
 		return
 	}
 
@@ -156,7 +155,7 @@ func (c *Client) validatePeer(p peer.Peer) bool {
 // Disconnect closes the connection to the peer.
 func (ap *ActivePeer) Disconnect() {
 	if ap.Conn != nil {
-		log.Printf("[client] disconnecting from peer %s:%d", ap.Peer.IpAddr, ap.Peer.Port)
+		// log.Printf("[client] disconnecting from peer %s:%d", ap.Peer.IpAddr, ap.Peer.Port)
 		_ = ap.Conn.Close()
 		ap.Conn = nil
 	}
@@ -169,7 +168,7 @@ func (c *Client) StopClient() {
 	defer c.mu.Unlock()
 
 	c.dedupePeer = make(map[string]time.Time)
-	log.Println("[client] stopped")
+	// log.Println("[client] stopped")
 }
 
 // GetBitfieldFromPeer reads the bitfield message right after the handshake done with the peer.
