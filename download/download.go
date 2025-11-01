@@ -26,7 +26,7 @@ type DownloadManager struct {
 	workQueue        chan int
 	downloadedPieces []bool
 
-	stats *stats
+	stats *Stats
 
 	mu     sync.Mutex
 	ctx    context.Context
@@ -49,11 +49,10 @@ type completedPiece struct {
 	buf    []byte
 }
 
-type stats struct {
-	startTime time.Time
-	done      int
-	total     int
-	peerCount int32
+type Stats struct {
+	Done      int
+	Total     int
+	PeerCount int32
 }
 
 func NewDownloadManager(torrent metainfo.Torrent, client *client.Client) *DownloadManager {
@@ -67,11 +66,10 @@ func NewDownloadManager(torrent metainfo.Torrent, client *client.Client) *Downlo
 		mu:               sync.Mutex{},
 		ctx:              ctx,
 		cancel:           cancel,
-		stats: &stats{
-			startTime: time.Now(),
-			total:     len(torrent.PiecesHash),
-			done:      0,
-			peerCount: 0,
+		stats: &Stats{
+			Total:     len(torrent.PiecesHash),
+			Done:      0,
+			PeerCount: 0,
 		},
 	}
 }
@@ -94,7 +92,7 @@ func (dm *DownloadManager) StartDownload(apC <-chan *client.ActivePeer) {
 			wg.Add(1)
 			go func(ap *client.ActivePeer) {
 				defer wg.Done()
-				atomic.AddInt32(&dm.stats.peerCount, 1)
+				atomic.AddInt32(&dm.stats.PeerCount, 1)
 				dm.peerDownload(ap, completedPieces)
 			}(ap)
 		}
@@ -105,6 +103,7 @@ func (dm *DownloadManager) StartDownload(apC <-chan *client.ActivePeer) {
 	pw, err := NewPieceWriter(dm.torrent)
 	if err != nil {
 		log.Fatalf("[download] failed to create piece writer: %v", err)
+		return
 	}
 	defer pw.CloseWriter()
 
@@ -112,7 +111,7 @@ func (dm *DownloadManager) StartDownload(apC <-chan *client.ActivePeer) {
 	for cp := range completedPieces {
 		err := pw.WritePiece(cp)
 		if err != nil {
-			log.Printf("[download] failed to write piece %d: %v", cp.index, err)
+			// log.Printf("[download] failed to write piece %d: %v", cp.index, err)
 			// Re-queue the piece for download
 			dm.mu.Lock()
 			dm.downloadedPieces[cp.index] = false
@@ -121,9 +120,9 @@ func (dm *DownloadManager) StartDownload(apC <-chan *client.ActivePeer) {
 			continue
 		}
 
-		log.Printf("[download] completed piece %d (%d/%d) (Peers: %d)", cp.index, dm.stats.done+1, dm.stats.total, atomic.LoadInt32(&dm.stats.peerCount))
-		dm.stats.done++
-		if dm.stats.done == dm.stats.total {
+		// log.Printf("[download] completed piece %d (%d/%d) (Peers: %d)", cp.index, dm.stats.Done+1, dm.stats.Total, atomic.LoadInt32(&dm.stats.PeerCount))
+		dm.stats.Done++
+		if dm.stats.Done == dm.stats.Total {
 			// All pieces done: stop giving out more work and cancel context
 			close(dm.workQueue)
 			close(completedPieces)
@@ -131,14 +130,12 @@ func (dm *DownloadManager) StartDownload(apC <-chan *client.ActivePeer) {
 			dm.cancel()
 		}
 	}
-
-	log.Println("[download] download completed")
 }
 
 // peerDownload handles downloading pieces from a single active peer.
 func (dm *DownloadManager) peerDownload(ap *client.ActivePeer, cp chan *completedPiece) {
 	defer func() {
-		atomic.AddInt32(&dm.stats.peerCount, -1)
+		atomic.AddInt32(&dm.stats.PeerCount, -1)
 		ap.Disconnect()
 	}()
 
@@ -176,17 +173,17 @@ func (dm *DownloadManager) peerDownload(ap *client.ActivePeer, cp chan *complete
 		err := wp.downloadPiece(ap)
 		if err != nil {
 			if err == io.EOF {
-				log.Printf("[download] peer %s:%d disconnected", ap.Peer.IpAddr, ap.Peer.Port)
+				// log.Printf("[download] peer %s:%d disconnected", ap.Peer.IpAddr, ap.Peer.Port)
 				return
 			}
 
-			log.Printf("[download] error downloading piece %d from peer %s:%d: %v", work, ap.Peer.IpAddr, ap.Peer.Port, err)
+			// log.Printf("[download] error downloading piece %d from peer %s:%d: %v", work, ap.Peer.IpAddr, ap.Peer.Port, err)
 			dm.workQueue <- work
 			ap.FailedCount++
 
 			// If the peer has failed too many times, disconnect
 			if ap.FailedCount >= config.Config.MaxFailedRetries {
-				log.Printf("[download] Peer %s:%d has failed too many times, disconnecting", ap.Peer.IpAddr, ap.Peer.Port)
+				// log.Printf("[download] Peer %s:%d has failed too many times, disconnecting", ap.Peer.IpAddr, ap.Peer.Port)
 				return
 			}
 			continue
@@ -309,17 +306,16 @@ func (wp *workPiece) read(ap *client.ActivePeer) error {
 		return nil
 
 	default:
-		log.Printf("unknown message id %d from peer %s:%d", msg.MessageId, ap.Peer.IpAddr, ap.Peer.Port)
+		// log.Printf("unknown message id %d from peer %s:%d", msg.MessageId, ap.Peer.IpAddr, ap.Peer.Port)
 	}
 
 	return nil
 }
 
-func (dm *DownloadManager) Stats() *stats {
-	return &stats{
-		startTime: dm.stats.startTime,
-		done:      dm.stats.done,
-		total:     dm.stats.total,
-		peerCount: atomic.LoadInt32(&dm.stats.peerCount),
+func (dm *DownloadManager) Stats() *Stats {
+	return &Stats{
+		Done:      dm.stats.Done,
+		Total:     dm.stats.Total,
+		PeerCount: atomic.LoadInt32(&dm.stats.PeerCount),
 	}
 }
