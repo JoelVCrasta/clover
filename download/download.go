@@ -88,18 +88,26 @@ func (dm *DownloadManager) StartDownload(apC <-chan *client.ActivePeer) {
 
 	// Start a goroutine for each active peer to download pieces
 	go func() {
-		for ap := range apC {
-			wg.Add(1)
-			go func(ap *client.ActivePeer) {
-				defer wg.Done()
-				atomic.AddInt32(&dm.stats.PeerCount, 1)
-				dm.peerDownload(ap, completedPieces)
-			}(ap)
-		}
+		for {
+			select {
+			case <-dm.ctx.Done():
+				return
 
-		wg.Wait()
+			case ap, ok := <-apC:
+				if !ok {
+					return
+				}
+				wg.Add(1)
+				go func(ap *client.ActivePeer) {
+					defer wg.Done()
+					atomic.AddInt32(&dm.stats.PeerCount, 1)
+					dm.peerDownload(ap, completedPieces)
+				}(ap)
+			}
+		}
 	}()
 
+	completed := false
 	pw, err := NewPieceWriter(dm.torrent)
 	if err != nil {
 		log.Fatalf("[download] failed to create piece writer: %v", err)
@@ -108,27 +116,45 @@ func (dm *DownloadManager) StartDownload(apC <-chan *client.ActivePeer) {
 	defer pw.CloseWriter()
 
 	// Listen for completed pieces and write them to disk
-	for cp := range completedPieces {
-		err := pw.WritePiece(cp)
-		if err != nil {
-			// log.Printf("[download] failed to write piece %d: %v", cp.index, err)
-			// Re-queue the piece for download
-			dm.mu.Lock()
-			dm.downloadedPieces[cp.index] = false
-			dm.mu.Unlock()
-			dm.workQueue <- cp.index
-			continue
-		}
-
-		// log.Printf("[download] completed piece %d (%d/%d) (Peers: %d)", cp.index, dm.stats.Done+1, dm.stats.Total, atomic.LoadInt32(&dm.stats.PeerCount))
-		dm.stats.Done++
-		if dm.stats.Done == dm.stats.Total {
-			// All pieces done: stop giving out more work and cancel context
-			close(dm.workQueue)
-			close(completedPieces)
+	loop:
+	for {
+		select {
+		case <-dm.ctx.Done():
 			dm.client.StopClient()
-			dm.cancel()
+			if !completed {
+				dm.DownloadStatus("Stopped")
+			}
+			break loop
+		
+		case cp, ok := <-completedPieces:
+			if !ok {
+				break loop 
+			}
+
+			err := pw.WritePiece(cp)
+			if err != nil {
+				dm.mu.Lock()
+				dm.downloadedPieces[cp.index] = false
+				dm.mu.Unlock()
+				dm.workQueue <- cp.index
+				continue
+			}
+
+			dm.stats.Done++
+			if dm.stats.Done == dm.stats.Total {
+				completed = true
+				dm.cancel()
+			}
 		}
+	}
+
+	wg.Wait()
+
+	close(completedPieces)
+	close(dm.workQueue)
+
+	if completed {
+		dm.DownloadStatus("Completed")
 	}
 }
 
@@ -318,4 +344,8 @@ func (dm *DownloadManager) Stats() *Stats {
 		Total:     dm.stats.Total,
 		PeerCount: atomic.LoadInt32(&dm.stats.PeerCount),
 	}
+}
+
+func (dm *DownloadManager) DownloadStatus(status string) string {
+	return fmt.Sprintf("Download %s!\n", status)
 }
