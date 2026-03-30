@@ -10,19 +10,26 @@ import (
 
 func main() {
 	input := flag.String("i", "", "Path to the .torrent file")
-	output := flag.String("o", "", "Output directory to save the downloaded files")
+	output := flag.String("o", "", "Path to the download directory (Default: ~/Downloads)")
+
+	flag.Usage = func() {
+		fmt.Fprintf(os.Stderr, "clover is a lightweight, fast leech only torrent client.\n")
+		fmt.Fprintf(os.Stderr, "Usage: clover -i <torrentfile> -o <outputdir>\n\n")
+		fmt.Fprintf(os.Stderr, "Options:\n")
+		flag.PrintDefaults()
+	}
 
 	flag.Parse()
 
 	if *input == "" {
-		fmt.Println("Usage: clover -i <torrentfile> -o <outputdir>")
+		flag.Usage()
 		os.Exit(1)
 	}
 
 	if *output == "." {
 		cwd, err := os.Getwd()
 		if err != nil {
-			fmt.Println("ERROR:", err)
+			fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
 			os.Exit(1)
 		}
 		*output = cwd
@@ -30,7 +37,7 @@ func main() {
 
 	err := torrent.StartTorrent(*input, *output)
 	if err != nil {
-		fmt.Println(err)
+		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
 		os.Exit(1)
 	}
 }
