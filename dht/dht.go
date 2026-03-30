@@ -100,5 +100,4 @@ func (d *DHT) announceOnce(peerChan chan<- peer.Peer) {
 func (d *DHT) StopDHT() {
 	d.cancel()
 	d.server.Close()
-	// log.Println("[dht] stopped")
 }
