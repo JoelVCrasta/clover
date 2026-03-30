@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -468,12 +469,14 @@ func (dm *DownloadManager) renderProgress() {
 	dm.mu.Lock()
 	defer dm.mu.Unlock()
 
-	fmt.Print("\033[H\033[2J")
-	fmt.Printf("Downloading torrent in progress...\n")
-	fmt.Printf("Name: %s\n", dm.torrent.Info.Name)
-	fmt.Printf("Pieces: %d/%d | Peers: %d | Time Elapsed: %s\n\n",
+	var b strings.Builder
+
+	b.WriteString("\033[H\033[2J")
+	b.WriteString("Downloading torrent in progress...\n")
+	b.WriteString(fmt.Sprintf("Name: %s\n", dm.torrent.Info.Name))
+	b.WriteString(fmt.Sprintf("Pieces: %d/%d | Peers: %d | Time Elapsed: %s\n\n",
 		dm.stats.Done, dm.stats.Total, atomic.LoadInt32(&dm.stats.PeerCount),
-		dm.stats.TimeElapsed)
+		dm.stats.TimeElapsed))
 
 	width, _, err := term.GetSize(int(os.Stdout.Fd()))
 	if err != nil {
@@ -494,9 +497,11 @@ func (dm *DownloadManager) renderProgress() {
 		progressBar += "\033[90m█\033[0m"
 	}
 
-	fmt.Printf("%s %s\n", progressBar, progressPercentage)
+	b.WriteString(fmt.Sprintf("%s %s\n", progressBar, progressPercentage))
 
 	if progress < 1.0 {
-		fmt.Print("\n\nUse Ctrl+C to stop.")
+		b.WriteString("\n\nUse Ctrl+C to stop.")
 	}
+	
+	fmt.Print(b.String())
 }
