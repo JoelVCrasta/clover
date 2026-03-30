@@ -28,7 +28,6 @@ func StartPeerDiscovery(ctx context.Context, announceList []string, infoHash [20
 
 	pC := peer.MergeStream(ctx, tC, dhtC)
 
-	// cleanup when ctx is triggered
 	go func() {
 		<-ctx.Done()
 		tm.StopTracker()
