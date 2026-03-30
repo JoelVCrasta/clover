@@ -7,9 +7,13 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"golang.org/x/term"
 
 	"github.com/JoelVCrasta/clover/client"
 	"github.com/JoelVCrasta/clover/config"
@@ -17,13 +21,15 @@ import (
 	"github.com/JoelVCrasta/clover/metainfo"
 )
 
-const MAX_BLOCK_SIZE = 16384 // 16 KiB
-const MAX_BACKLOG = 10
+const (
+	MAX_BLOCK_SIZE = 16384 // 16 KiB
+	MAX_BACKLOG    = 10
+)
 
 type DownloadManager struct {
 	client           *client.Client
 	torrent          metainfo.Torrent
-	workQueue        chan int
+	todoPieces       []int
 	downloadedPieces []bool
 
 	stats *Stats
@@ -50,26 +56,33 @@ type completedPiece struct {
 }
 
 type Stats struct {
-	Done      int
-	Total     int
-	PeerCount int32
+	Done        int
+	Total       int
+	PeerCount   int32
+	TimeElapsed time.Duration
 }
 
-func NewDownloadManager(torrent metainfo.Torrent, client *client.Client) *DownloadManager {
-	ctx, cancel := context.WithCancel(context.Background())
+func NewDownloadManager(ctx context.Context, torrent metainfo.Torrent, client *client.Client) *DownloadManager {
+	ctx, cancel := context.WithCancel(ctx)
+
+	todoPieces := make([]int, len(torrent.PiecesHash))
+	for i := range torrent.PiecesHash {
+		todoPieces[i] = i
+	}
 
 	return &DownloadManager{
 		client:           client,
 		torrent:          torrent,
-		workQueue:        make(chan int, len(torrent.PiecesHash)),
+		todoPieces:       todoPieces,
 		downloadedPieces: make([]bool, len(torrent.PiecesHash)),
 		mu:               sync.Mutex{},
 		ctx:              ctx,
 		cancel:           cancel,
 		stats: &Stats{
-			Total:     len(torrent.PiecesHash),
-			Done:      0,
-			PeerCount: 0,
+			Total:       len(torrent.PiecesHash),
+			Done:        0,
+			PeerCount:   0,
+			TimeElapsed: 0,
 		},
 	}
 }
@@ -79,14 +92,10 @@ StartDownload begins the download process by distributing work to active peers.
 The completed pieces are written to disk using the PieceWriter.
 */
 func (dm *DownloadManager) StartDownload(apC <-chan *client.ActivePeer) {
-	for i := range dm.torrent.PiecesHash {
-		dm.workQueue <- i
-	}
-
 	completedPieces := make(chan *completedPiece, 50)
 	var wg sync.WaitGroup
 
-	// Start a goroutine for each active peer to download pieces
+	// start a goroutine for each active peer to download pieces
 	go func() {
 		for {
 			select {
@@ -107,6 +116,21 @@ func (dm *DownloadManager) StartDownload(apC <-chan *client.ActivePeer) {
 		}
 	}()
 
+	// render stats in some interval
+	go func() {
+		ticker := time.NewTicker(1 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				dm.stats.TimeElapsed += 1 * time.Second
+				dm.renderProgress()
+			case <-dm.ctx.Done():
+				return
+			}
+		}
+	}()
+
 	completed := false
 	pw, err := NewPieceWriter(dm.torrent)
 	if err != nil {
@@ -115,8 +139,8 @@ func (dm *DownloadManager) StartDownload(apC <-chan *client.ActivePeer) {
 	}
 	defer pw.CloseWriter()
 
-	// Listen for completed pieces and write them to disk
-	loop:
+	// listen for completed pieces and write them to disk
+loop:
 	for {
 		select {
 		case <-dm.ctx.Done():
@@ -125,25 +149,37 @@ func (dm *DownloadManager) StartDownload(apC <-chan *client.ActivePeer) {
 				dm.DownloadStatus("Stopped")
 			}
 			break loop
-		
+
 		case cp, ok := <-completedPieces:
 			if !ok {
-				break loop 
+				break loop
 			}
+
+			dm.mu.Lock()
+			if dm.downloadedPieces[cp.index] {
+				dm.mu.Unlock()
+				continue
+			}
+			dm.downloadedPieces[cp.index] = true
+			dm.mu.Unlock()
 
 			err := pw.WritePiece(cp)
 			if err != nil {
 				dm.mu.Lock()
 				dm.downloadedPieces[cp.index] = false
+				dm.todoPieces = append(dm.todoPieces, cp.index)
 				dm.mu.Unlock()
-				dm.workQueue <- cp.index
 				continue
 			}
 
+			dm.mu.Lock()
 			dm.stats.Done++
 			if dm.stats.Done == dm.stats.Total {
 				completed = true
+				dm.mu.Unlock()
 				dm.cancel()
+			} else {
+				dm.mu.Unlock()
 			}
 		}
 	}
@@ -151,10 +187,49 @@ func (dm *DownloadManager) StartDownload(apC <-chan *client.ActivePeer) {
 	wg.Wait()
 
 	close(completedPieces)
-	close(dm.workQueue)
 
 	if completed {
+		dm.renderProgress()
 		dm.DownloadStatus("Completed")
+	}
+}
+
+func (dm *DownloadManager) pickPiece(ap *client.ActivePeer) (int, bool) {
+	dm.mu.Lock()
+	defer dm.mu.Unlock()
+
+	for i, index := range dm.todoPieces {
+		if ap.Bitfield.Has(index) {
+			dm.todoPieces = append(dm.todoPieces[:i], dm.todoPieces[i+1:]...)
+			return index, true
+		}
+	}
+
+	// end game mode
+	remaining := dm.stats.Total - dm.stats.Done
+	if remaining > 0 && remaining <= 5 {
+		for i, done := range dm.downloadedPieces {
+			if !done && ap.Bitfield.Has(i) {
+				return i, true
+			}
+		}
+	}
+
+	return 0, false
+}
+
+func (dm *DownloadManager) returnPiece(index int) {
+	dm.mu.Lock()
+	defer dm.mu.Unlock()
+	// only return if not already downloaded
+	if !dm.downloadedPieces[index] {
+		// avoid duplicates in todoPieces
+		for _, p := range dm.todoPieces {
+			if p == index {
+				return
+			}
+		}
+		dm.todoPieces = append(dm.todoPieces, index)
 	}
 }
 
@@ -167,72 +242,112 @@ func (dm *DownloadManager) peerDownload(ap *client.ActivePeer, cp chan *complete
 
 	_ = ap.SendInterested()
 
-	for work := range dm.workQueue {
-		if ap.Conn == nil {
+	for {
+		select {
+		case <-dm.ctx.Done():
 			return
-		}
-
-		// Check if the piece is already downloaded
-		if dm.downloadedPieces[work] {
-			continue
-		}
-
-		// Check if the peer has the piece
-		if !ap.Bitfield.Has(work) {
-			dm.workQueue <- work
-			continue
-		}
-
-		// log.Printf("[download] downloading piece %d from peer %s:%d", work, ap.Peer.IpAddr, ap.Peer.Port)
-
-		length := dm.calculatePieceLength(work)
-		wp := &workPiece{
-			index:           work,
-			buf:             make([]byte, length),
-			hash:            dm.torrent.PiecesHash[work],
-			length:          length,
-			downloadedBytes: 0,
-			requestedBytes:  0,
-			backlog:         0,
-		}
-
-		err := wp.downloadPiece(ap)
-		if err != nil {
-			if err == io.EOF {
-				// log.Printf("[download] peer %s:%d disconnected", ap.Peer.IpAddr, ap.Peer.Port)
+		default:
+			if ap.Conn == nil {
 				return
 			}
 
-			// log.Printf("[download] error downloading piece %d from peer %s:%d: %v", work, ap.Peer.IpAddr, ap.Peer.Port, err)
-			dm.workQueue <- work
-			ap.FailedCount++
-
-			// If the peer has failed too many times, disconnect
-			if ap.FailedCount >= config.Config.MaxFailedRetries {
-				// log.Printf("[download] Peer %s:%d has failed too many times, disconnecting", ap.Peer.IpAddr, ap.Peer.Port)
-				return
+			work, ok := dm.pickPiece(ap)
+			if !ok {
+				err := dm.handleMessage(ap, nil)
+				if err != nil {
+					if nerr, ok := err.(net.Error); ok && nerr.Timeout() {
+						continue // Just a timeout, keep connection alive
+					}
+					return
+				}
+				time.Sleep(100 * time.Millisecond)
+				continue
 			}
-			continue
-		}
 
-		dm.mu.Lock()
-		dm.downloadedPieces[work] = true
-		dm.mu.Unlock()
+			// Check if piece was finished during the end game
+			dm.mu.Lock()
+			if dm.downloadedPieces[work] {
+				dm.mu.Unlock()
+				continue
+			}
+			dm.mu.Unlock()
 
-		ap.SendHave(wp.index)
-		cp <- &completedPiece{
-			index:  wp.index,
-			length: wp.length,
-			buf:    wp.buf,
+			if ap.IsChoked() {
+				dm.returnPiece(work)
+				err := dm.handleMessage(ap, nil)
+				if err != nil {
+					if nerr, ok := err.(net.Error); ok && nerr.Timeout() {
+						continue
+					}
+					return
+				}
+				time.Sleep(100 * time.Millisecond)
+				continue
+			}
+
+			length := dm.calculatePieceLength(work)
+			wp := &workPiece{
+				index:           work,
+				buf:             make([]byte, length),
+				hash:            dm.torrent.PiecesHash[work],
+				length:          length,
+				downloadedBytes: 0,
+				requestedBytes:  0,
+				backlog:         0,
+			}
+
+			err := wp.downloadPiece(ap, dm)
+			if err != nil {
+				dm.returnPiece(work)
+				if err == io.EOF {
+					return
+				}
+
+				if nerr, ok := err.(net.Error); ok && nerr.Timeout() {
+					continue
+				}
+
+				if err.Error() != "peer choked" {
+					ap.FailedCount++
+				}
+
+				// If the peer has failed too many times, disconnect
+				if ap.FailedCount >= config.Config.MaxFailedRetries {
+					return
+				}
+				continue
+			}
+
+			// Verify one last time before sending to writer
+			dm.mu.Lock()
+			if dm.downloadedPieces[work] {
+				dm.mu.Unlock()
+				continue
+			}
+			dm.mu.Unlock()
+
+			ap.SendHave(wp.index)
+			cp <- &completedPiece{
+				index:  wp.index,
+				length: wp.length,
+				buf:    wp.buf,
+			}
 		}
 	}
-
 }
 
 // downloadPiece manages the download of a single piece from the peer.
-func (wp *workPiece) downloadPiece(ap *client.ActivePeer) error {
+func (wp *workPiece) downloadPiece(ap *client.ActivePeer, dm *DownloadManager) error {
 	for wp.downloadedBytes < wp.length {
-		for !ap.Choked && wp.backlog < MAX_BACKLOG && wp.requestedBytes < wp.length {
+		// check if some other peer finished this piece during the end game
+		dm.mu.Lock()
+		if dm.downloadedPieces[wp.index] {
+			dm.mu.Unlock()
+			return nil
+		}
+		dm.mu.Unlock()
+
+		for !ap.IsChoked() && wp.backlog < MAX_BACKLOG && wp.requestedBytes < wp.length {
 			blockSize := MAX_BLOCK_SIZE
 			remaining := wp.length - wp.requestedBytes
 			if remaining < blockSize {
@@ -245,13 +360,18 @@ func (wp *workPiece) downloadPiece(ap *client.ActivePeer) error {
 			wp.requestedBytes += blockSize
 		}
 
-		err := wp.read(ap)
+		if ap.IsChoked() && wp.backlog == 0 {
+			return fmt.Errorf("peer choked")
+		}
+
+		err := dm.handleMessage(ap, wp)
 		if err != nil {
 			return err
 		}
 	}
 
 	if !wp.verify() {
+		// log.Printf("[download] piece %d failed verification", wp.index)
 		return fmt.Errorf("piece %d failed verification", wp.index)
 	}
 	return nil
@@ -279,8 +399,8 @@ func (wp *workPiece) verify() bool {
 	return bytes.Equal(pieceHash[:], wp.hash[:])
 }
 
-// read reads a message from the peer and handles it accordingly.
-func (wp *workPiece) read(ap *client.ActivePeer) error {
+// handleMessage reads a message from the peer and handles it accordingly.
+func (dm *DownloadManager) handleMessage(ap *client.ActivePeer, wp *workPiece) error {
 	ap.Conn.SetDeadline(time.Now().Add(config.Config.PieceMessageTimeout))
 	defer ap.Conn.SetDeadline(time.Time{})
 
@@ -290,17 +410,15 @@ func (wp *workPiece) read(ap *client.ActivePeer) error {
 	}
 
 	if msg == nil {
-		return nil // Keep-alive message
+		return nil // keep-alive message
 	}
 
 	switch msg.MessageId {
 	case message.ChokeId:
-		// log.Printf("peer %s:%d choked us", ap.Peer.IpAddr, ap.Peer.Port)
-		ap.Choked = true
+		ap.SetChoked(true)
 
 	case message.UnchokeId:
-		// log.Printf("peer %s:%d unchoked us", ap.Peer.IpAddr, ap.Peer.Port)
-		ap.Choked = false
+		ap.SetChoked(false)
 
 	case message.HaveId:
 		index, err := msg.DecodeHave()
@@ -317,6 +435,9 @@ func (wp *workPiece) read(ap *client.ActivePeer) error {
 		ap.Bitfield = bf
 
 	case message.PieceId:
+		if wp == nil {
+			return nil
+		}
 		offset, block, err := msg.DecodePiece(wp.index, wp.length)
 		if err != nil {
 			return err
@@ -326,13 +447,9 @@ func (wp *workPiece) read(ap *client.ActivePeer) error {
 		if wp.backlog > 0 {
 			wp.backlog--
 		}
-		// log.Printf("[block] piece %d: downloaded %d/%d bytes", wp.index, wp.downloadedBytes, wp.length)
 
 	case message.PortId:
 		return nil
-
-	default:
-		// log.Printf("unknown message id %d from peer %s:%d", msg.MessageId, ap.Peer.IpAddr, ap.Peer.Port)
 	}
 
 	return nil
@@ -348,4 +465,37 @@ func (dm *DownloadManager) Stats() *Stats {
 
 func (dm *DownloadManager) DownloadStatus(status string) string {
 	return fmt.Sprintf("Download %s!\n", status)
+}
+
+func (dm *DownloadManager) CancelDownload() context.CancelFunc {
+	return dm.cancel
+}
+
+// renderProgress renders the stats and the downloaded piece matrix
+func (dm *DownloadManager) renderProgress() {
+	dm.mu.Lock()
+	defer dm.mu.Unlock()
+
+	fmt.Print("\033[H\033[2J")
+	fmt.Printf("Downloading torrent in progress...\n")
+	fmt.Printf("Pieces: %d/%d | Peers: %d | Time Elapsed: %s\n\n",
+		dm.stats.Done, dm.stats.Total, atomic.LoadInt32(&dm.stats.PeerCount),
+		dm.stats.TimeElapsed)
+
+	width, _, err := term.GetSize(int(os.Stdout.Fd()))
+	if err != nil {
+		width = 64
+	}
+	
+	for i, done := range dm.downloadedPieces {
+		if done {
+			fmt.Print("\033[97m█\033[0m") // white
+		} else {
+			fmt.Print("\033[90m█\033[0m") // gray
+		}
+		if (i+1)%width == 0 {
+			fmt.Println()
+		}
+	}
+	fmt.Print("\n\nUse Ctrl+C to stop.")
 }

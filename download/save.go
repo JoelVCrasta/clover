@@ -2,7 +2,6 @@ package download
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 
@@ -10,33 +9,35 @@ import (
 	"github.com/JoelVCrasta/clover/metainfo"
 )
 
-var root_ string
-
 type PieceWriter struct {
-	torrent metainfo.Torrent
-	files   map[string]*os.File
+	torrent  metainfo.Torrent
+	files    map[string]*os.File
+	basePath string
 }
 
 func NewPieceWriter(torrent metainfo.Torrent) (*PieceWriter, error) {
-	pw := &PieceWriter{
-		torrent: torrent,
-		files:   make(map[string]*os.File),
-	}
-
+	var basePath string
 	if torrent.OutputPath != "" {
-		root_ = torrent.OutputPath
+		basePath = torrent.OutputPath
 	} else {
-		root_ = config.Config.DownloadDirectory
+		basePath = config.Config.DownloadDirectory
 	}
 
-	root := filepath.Join(root_, torrent.Info.Name)
+	pw := &PieceWriter{
+		torrent:  torrent,
+		files:    make(map[string]*os.File),
+		basePath: basePath,
+	}
+
+	root := filepath.Join(basePath, torrent.Info.Name)
 
 	cleanup := func() {
 		pw.CloseWriter()
 		_ = os.RemoveAll(root)
 	}
+	success := false
 	defer func() {
-		if cleanup != nil {
+		if !success {
 			cleanup()
 		}
 	}()
@@ -56,7 +57,7 @@ func NewPieceWriter(torrent metainfo.Torrent) (*PieceWriter, error) {
 				return nil, fmt.Errorf("failed to create subdir: %v", err)
 			}
 
-			f, err := os.Create(fullPath)
+			f, err := os.OpenFile(fullPath, os.O_RDWR|os.O_CREATE, 0644)
 			if err != nil {
 				return nil, fmt.Errorf("failed to create file: %v", err)
 			}
@@ -74,20 +75,20 @@ func NewPieceWriter(torrent metainfo.Torrent) (*PieceWriter, error) {
 			return nil, fmt.Errorf("failed to create download dir: %v", err)
 		}
 
-		file, err := os.Create(root)
+		f, err := os.OpenFile(root, os.O_RDWR|os.O_CREATE, 0644)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create file: %v", err)
 		}
 
-		if err := file.Truncate(int64(torrent.Info.Length)); err != nil {
-			file.Close()
+		if err := f.Truncate(int64(torrent.Info.Length)); err != nil {
+			f.Close()
 			return nil, fmt.Errorf("failed to preallocate file: %v", err)
 		}
 
-		pw.files[root] = file
+		pw.files[root] = f
 	}
 
-	cleanup = nil
+	success = true
 	return pw, nil
 }
 
@@ -112,7 +113,7 @@ func (pw *PieceWriter) WritePiece(cp *completedPiece) error {
 			writeEnd := min(pieceEnd, fileEnd)
 			writeLen := writeEnd - writeStart
 
-			filePath := filepath.Join(root_, pw.torrent.Info.Name, file.Path)
+			filePath := filepath.Join(pw.basePath, pw.torrent.Info.Name, file.Path)
 			f := pw.files[filePath]
 			if f == nil {
 				return fmt.Errorf("file not found for path: %s", filePath)
@@ -130,7 +131,7 @@ func (pw *PieceWriter) WritePiece(cp *completedPiece) error {
 			}
 		}
 	} else {
-		filePath := filepath.Join(root_, pw.torrent.Info.Name)
+		filePath := filepath.Join(pw.basePath, pw.torrent.Info.Name)
 		f := pw.files[filePath]
 		if f == nil {
 			return fmt.Errorf("file not found for path: %s", filePath)
@@ -149,5 +150,4 @@ func (pw *PieceWriter) CloseWriter() {
 	for _, file := range pw.files {
 		_ = file.Close()
 	}
-	log.Println("[download] piece writer closed")
 }

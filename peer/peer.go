@@ -12,30 +12,43 @@ type Peer struct {
 }
 
 // MergeStream merges two channels from the 2 sources (tracker and dht) into a single channel.
-func MergeStream(tC <-chan Peer, dhtC <-chan Peer) (<-chan Peer, context.CancelFunc) {
-	ctx, cancel := context.WithCancel(context.Background())
-	peerChan := make(chan Peer)
+func MergeStream(ctx context.Context, tC <-chan Peer, dhtC <-chan Peer) <-chan Peer {
+	peerChan := make(chan Peer, 1000)
 
 	go func() {
 		defer close(peerChan)
 
-		for {
+		for tC != nil || dhtC != nil {
 			select {
 			case peer, ok := <-tC:
-				if ok {
-					peerChan <- peer
+				if !ok {
+					tC = nil
+					continue
 				}
+				select {
+				case peerChan <- peer:
+				case <-ctx.Done():
+					return
+				}
+
 			case peer, ok := <-dhtC:
-				if ok {
-					peerChan <- peer
+				if !ok {
+					dhtC = nil
+					continue
 				}
+				select {
+				case peerChan <- peer:
+				case <-ctx.Done():
+					return
+				}
+
 			case <-ctx.Done():
 				return
 			}
 		}
 	}()
 
-	return peerChan, cancel
+	return peerChan
 }
 
 func (p Peer) String() string {

@@ -61,8 +61,8 @@ type AnnounceResponse struct {
 	Peers         []peer.Peer
 }
 
-func NewTrackerManager(trackerUrls []string, infoHash, peerId [20]byte) *TrackerManager {
-	ctx, cancel := context.WithCancel(context.Background())
+func NewTrackerManager(ctx context.Context, trackerUrls []string, infoHash, peerId [20]byte) *TrackerManager {
+	ctx, cancel := context.WithCancel(ctx)
 
 	return &TrackerManager{
 		// Trackers:    make([]*Tracker, 0),
@@ -80,7 +80,7 @@ It will periodically re-announce to the trackers.
 It returns a channel of Peer objects that can be used to connect to peers.
 */
 func (tm *TrackerManager) StartTracker() (<-chan peer.Peer, error) {
-	peerChan := make(chan peer.Peer)
+	peerChan := make(chan peer.Peer, 500)
 
 	for _, url := range tm.trackerUrls {
 		go func(trackerUrl string) {
@@ -305,7 +305,9 @@ func (a *AnnounceResponse) decodeAnnounceResponse(buf []byte, n int) {
 	for i := range peersCount {
 		offset := i * 6
 
-		a.Peers[i].IpAddr = net.IP(buf[20+offset : 20+offset+4])
+		ip := make(net.IP, 4)
+		copy(ip, buf[20+offset : 20+offset+4])
+		a.Peers[i].IpAddr = ip
 		a.Peers[i].Port = binary.BigEndian.Uint16(buf[24+offset:])
 	}
 }

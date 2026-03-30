@@ -17,7 +17,7 @@ type DHT struct {
 	cancel   context.CancelFunc
 }
 
-func NewDHT(infoHash [20]byte) (*DHT, error) {
+func NewDHT(ctx context.Context, infoHash [20]byte) (*DHT, error) {
 	config := dht.NewDefaultServerConfig()
 
 	server, err := dht.NewServer(config)
@@ -25,7 +25,7 @@ func NewDHT(infoHash [20]byte) (*DHT, error) {
 		return nil, fmt.Errorf("[dht] failed to create DHT server: %w", err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(ctx)
 
 	return &DHT{
 		server:   server,
@@ -41,15 +41,14 @@ It returns a channel that will receive discovered peers.
 It will periodically announce the info hash every 5 minutes.
 */
 func (d *DHT) StartDHT() (<-chan peer.Peer, error) {
-	if _, err := d.server.Bootstrap(); err != nil {
-		d.server.Close()
-		return nil, fmt.Errorf("[dht] bootstrap failed: %w", err)
-	}
-
 	peerChan := make(chan peer.Peer, 500)
 
 	go func() {
 		defer close(peerChan)
+
+		if _, err := d.server.Bootstrap(); err != nil {
+			log.Printf("[dht] bootstrap failed: %v", err)
+		}
 
 		// announce immediately first
 		d.announceOnce(peerChan)
@@ -81,19 +80,18 @@ func (d *DHT) announceOnce(peerChan chan<- peer.Peer) {
 
 	for peerValues := range announce.Peers {
 		for _, p := range peerValues.Peers {
-			select {
-			case <-d.ctx.Done(): // exit quickly if stopped
-				return
-			default:
-				peer := peer.Peer{
-					IpAddr: p.IP,
-					Port:   uint16(p.Port),
-				}
-				if peer.IpAddr == nil || peer.IpAddr.IsUnspecified() {
-					continue // skip invalid IPs
-				}
+			p_peer := peer.Peer{
+				IpAddr: p.IP,
+				Port:   uint16(p.Port),
+			}
+			if p_peer.IpAddr == nil || p_peer.IpAddr.IsUnspecified() {
+				continue // skip invalid IPs
+			}
 
-				peerChan <- peer
+			select {
+			case peerChan <- p_peer:
+			case <-d.ctx.Done():
+				return
 			}
 		}
 	}
@@ -102,5 +100,5 @@ func (d *DHT) announceOnce(peerChan chan<- peer.Peer) {
 func (d *DHT) StopDHT() {
 	d.cancel()
 	d.server.Close()
-	log.Println("[dht] stopped")
+	// log.Println("[dht] stopped")
 }

@@ -2,36 +2,38 @@ package torrent
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/JoelVCrasta/clover/dht"
 	"github.com/JoelVCrasta/clover/peer"
 	"github.com/JoelVCrasta/clover/tracker"
 )
 
-func StartPeerDiscovery(announceList []string, infoHash [20]byte, peerId [20]byte) (<-chan peer.Peer, context.CancelFunc, error) {
-	tm := tracker.NewTrackerManager(announceList, infoHash, peerId)
-	d, err := dht.NewDHT(infoHash)
+// StartPeerDiscovery is used start the trackers and dht to seach for peers
+// and merge them into a single channel
+func StartPeerDiscovery(ctx context.Context, announceList []string, infoHash [20]byte, peerId [20]byte) (<-chan peer.Peer, error) {
+	tm := tracker.NewTrackerManager(ctx, announceList, infoHash, peerId)
+	d, err := dht.NewDHT(ctx, infoHash)
 	if err != nil {
-		return nil, nil, fmt.Errorf("%w", err)
+		return nil, err
 	}
 
 	tC, err := tm.StartTracker()
 	if err != nil {
-		return nil, nil, fmt.Errorf("%w", err)
+		return nil, err
 	}
 	dhtC, err := d.StartDHT()
 	if err != nil {
-		return nil, nil, fmt.Errorf("%w", err)
+		return nil, err
 	}
 
-	pC, mergeStreamCancel := peer.MergeStream(tC, dhtC)
+	pC := peer.MergeStream(ctx, tC, dhtC)
 
-	cancel := func() {
+	// cleanup when ctx is triggered
+	go func() {
+		<-ctx.Done()
 		tm.StopTracker()
 		d.StopDHT()
-		mergeStreamCancel()
-	}
+	}()
 
-	return pC, cancel, nil
+	return pC, nil
 }

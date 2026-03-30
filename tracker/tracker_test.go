@@ -1,6 +1,7 @@
 package tracker_test
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -21,7 +22,9 @@ func TestTracker(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	ctx := context.Background()
 	trackerManager := tracker.NewTrackerManager(
+		ctx,
 		data.AnnounceList,
 		data.InfoHash,
 		peerId,

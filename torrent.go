@@ -1,7 +1,10 @@
 package torrent
 
 import (
+	"context"
 	"fmt"
+	"os"
+	"os/signal"
 
 	"github.com/JoelVCrasta/clover/client"
 	"github.com/JoelVCrasta/clover/download"
@@ -22,20 +25,24 @@ func StartTorrent(inputPath string, outputPath string) error {
 		return err
 	}
 
+	// this is the global context for stopping the torrent
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
 	fmt.Println("Searching for peers...")
-	pC, cancel, err := StartPeerDiscovery(tr.AnnounceList, tr.InfoHash, peerId)
+	pC, err := StartPeerDiscovery(ctx, tr.AnnounceList, tr.InfoHash, peerId)
 	if err != nil {
 		return err
 	}
-	defer cancel()
 
-	fmt.Printf("Started downloading: %s\n", tr.Info.Name)
-	client := client.NewClient(pC, tr.InfoHash, peerId)
+	fmt.Println("Started download...")
+	client := client.NewClient(ctx, pC, tr.InfoHash, peerId)
 	apC := client.StartClient()
 
-	dm := download.NewDownloadManager(tr, client)
-	go StartTUI(dm.Stats)
+	dm := download.NewDownloadManager(ctx, tr, client)
+
+	// go StartTUI(dm)
 	dm.StartDownload(apC)
-	fmt.Println("Download completed successfully")
+
 	return nil
 }

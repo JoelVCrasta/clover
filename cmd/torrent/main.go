@@ -30,7 +30,7 @@ func main() {
 
 	err := torrent.StartTorrent(*input, *output)
 	if err != nil {
-		fmt.Println("ERROR:", err)
+		fmt.Println(err)
 		os.Exit(1)
 	}
 }

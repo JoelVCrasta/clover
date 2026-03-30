@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log"
 
 	torrent "github.com/JoelVCrasta/clover"
@@ -26,16 +27,19 @@ func main() {
 	}
 	log.Println("Peer ID:", string(peerId[:]))
 
-	pC, cancel, err := torrent.StartPeerDiscovery(tr.AnnounceList, tr.InfoHash, peerId)
+	// this is the global context for stopping the torrent
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	pC, err := torrent.StartPeerDiscovery(ctx, tr.AnnounceList, tr.InfoHash, peerId)
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer cancel()
 
-	client := client.NewClient(pC, tr.InfoHash, peerId)
+	client := client.NewClient(ctx, pC, tr.InfoHash, peerId)
 	apC := client.StartClient()
 
-	dm := download.NewDownloadManager(tr, client)
+	dm := download.NewDownloadManager(ctx, tr, client)
 	dm.StartDownload(apC)
 
 }

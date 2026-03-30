@@ -29,12 +29,25 @@ type ActivePeer struct {
 	Conn        net.Conn
 	PeerId      [20]byte
 	Choked      bool
+	mu          sync.Mutex
 	Bitfield    Bitfield
 	FailedCount int
 }
 
-func NewClient(peerChan <-chan peer.Peer, infoHash [20]byte, peerId [20]byte) *Client {
-	ctx, cancel := context.WithCancel(context.Background())
+func (ap *ActivePeer) SetChoked(choked bool) {
+	ap.mu.Lock()
+	defer ap.mu.Unlock()
+	ap.Choked = choked
+}
+
+func (ap *ActivePeer) IsChoked() bool {
+	ap.mu.Lock()
+	defer ap.mu.Unlock()
+	return ap.Choked
+}
+
+func NewClient(ctx context.Context, peerChan <-chan peer.Peer, infoHash [20]byte, peerId [20]byte) *Client {
+	ctx, cancel := context.WithCancel(ctx)
 
 	return &Client{
 		peerChan:   peerChan,
@@ -107,6 +120,12 @@ func (c *Client) AddPeer(p peer.Peer, apC chan<- *ActivePeer) {
 		FailedCount: 0,
 	}
 
+	// Unblock reads on cancellation
+	go func() {
+		<-c.ctx.Done()
+		activePeer.Disconnect()
+	}()
+
 	select {
 	case apC <- activePeer:
 	case <-c.ctx.Done():
@@ -134,7 +153,7 @@ func (c *Client) AddPeer(p peer.Peer, apC chan<- *ActivePeer) {
 // validatePeer checks if the peer is valid and not already in the dedupe map.
 func (c *Client) validatePeer(p peer.Peer) bool {
 	if p.IpAddr == nil || p.IpAddr.IsUnspecified() {
-		return false // Invalid IP address
+		return false
 	}
 
 	key := p.String()
@@ -144,31 +163,24 @@ func (c *Client) validatePeer(p peer.Peer) bool {
 
 	if lastSeen, exists := c.dedupePeer[key]; exists {
 		if time.Since(lastSeen) < 5*time.Minute {
-			return false // Cooldown period not over
+			return false
 		}
 	}
 	c.dedupePeer[key] = time.Time{}
 
-	return true // New peer
+	return true
 }
 
 // Disconnect closes the connection to the peer.
 func (ap *ActivePeer) Disconnect() {
 	if ap.Conn != nil {
-		// log.Printf("[client] disconnecting from peer %s:%d", ap.Peer.IpAddr, ap.Peer.Port)
 		_ = ap.Conn.Close()
-		ap.Conn = nil
 	}
 }
 
 // StopClient stops the client
 func (c *Client) StopClient() {
 	c.cancel()
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	c.dedupePeer = make(map[string]time.Time)
-	// log.Println("[client] stopped")
 }
 
 // GetBitfieldFromPeer reads the bitfield message right after the handshake done with the peer.
@@ -176,6 +188,10 @@ func GetBitfieldFromPeer(conn net.Conn) (Bitfield, error) {
 	msg, err := message.ReadMessage(conn)
 	if err != nil {
 		return nil, err
+	}
+
+	if msg == nil {
+		return nil, fmt.Errorf("expected Bitfield message, got KeepAlive")
 	}
 
 	if msg.MessageId != message.BitfieldId {
