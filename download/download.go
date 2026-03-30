@@ -9,6 +9,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -145,9 +146,6 @@ loop:
 		select {
 		case <-dm.ctx.Done():
 			dm.client.StopClient()
-			if !completed {
-				dm.DownloadStatus("Stopped")
-			}
 			break loop
 
 		case cp, ok := <-completedPieces:
@@ -190,7 +188,7 @@ loop:
 
 	if completed {
 		dm.renderProgress()
-		dm.DownloadStatus("Completed")
+		fmt.Printf("\nDownload completed. Torrent saved at %s\n", dm.torrent.OutputPath)
 	}
 }
 
@@ -224,10 +222,8 @@ func (dm *DownloadManager) returnPiece(index int) {
 	// only return if not already downloaded
 	if !dm.downloadedPieces[index] {
 		// avoid duplicates in todoPieces
-		for _, p := range dm.todoPieces {
-			if p == index {
-				return
-			}
+		if slices.Contains(dm.todoPieces, index) {
+			return
 		}
 		dm.todoPieces = append(dm.todoPieces, index)
 	}
@@ -463,39 +459,44 @@ func (dm *DownloadManager) Stats() *Stats {
 	}
 }
 
-func (dm *DownloadManager) DownloadStatus(status string) string {
-	return fmt.Sprintf("Download %s!\n", status)
-}
-
 func (dm *DownloadManager) CancelDownload() context.CancelFunc {
 	return dm.cancel
 }
 
-// renderProgress renders the stats and the downloaded piece matrix
+// renderProgress renders the stats and the progress bar
 func (dm *DownloadManager) renderProgress() {
 	dm.mu.Lock()
 	defer dm.mu.Unlock()
 
 	fmt.Print("\033[H\033[2J")
 	fmt.Printf("Downloading torrent in progress...\n")
+	fmt.Printf("Name: %s\n", dm.torrent.Info.Name)
 	fmt.Printf("Pieces: %d/%d | Peers: %d | Time Elapsed: %s\n\n",
 		dm.stats.Done, dm.stats.Total, atomic.LoadInt32(&dm.stats.PeerCount),
 		dm.stats.TimeElapsed)
 
 	width, _, err := term.GetSize(int(os.Stdout.Fd()))
 	if err != nil {
-		width = 64
+		width = 32
 	}
-	
-	for i, done := range dm.downloadedPieces {
-		if done {
-			fmt.Print("\033[97m█\033[0m") // white
-		} else {
-			fmt.Print("\033[90m█\033[0m") // gray
-		}
-		if (i+1)%width == 0 {
-			fmt.Println()
-		}
+
+	progress := float64(dm.stats.Done) / float64(dm.stats.Total)
+	progressPercentage := fmt.Sprintf("[%.2f%%]", progress*100)
+	progressBarWidth := width - len(progressPercentage) - 1
+
+	progressBarLength := int(progress * float64(progressBarWidth))
+	progressBar := ""
+
+	for i := 0; i < progressBarLength; i++ {
+		progressBar += "\033[97m█\033[0m"
 	}
-	fmt.Print("\n\nUse Ctrl+C to stop.")
+	for i := progressBarLength; i < progressBarWidth; i++ {
+		progressBar += "\033[90m█\033[0m"
+	}
+
+	fmt.Printf("%s %s\n", progressBar, progressPercentage)
+
+	if progress < 1.0 {
+		fmt.Print("\n\nUse Ctrl+C to stop.")
+	}
 }
